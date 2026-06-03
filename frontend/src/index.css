@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+
+  body {
+    @apply bg-slate-950 text-slate-100 font-sans antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99,102,241,0.15), transparent),
+      radial-gradient(ellipse 60% 40% at 80% 110%, rgba(139,92,246,0.08), transparent);
+  }
+
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { @apply bg-slate-900/50; }
+  ::-webkit-scrollbar-thumb { @apply bg-slate-600 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-slate-500; }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-slate-800/50 backdrop-blur-md border border-slate-700/40 rounded-2xl shadow-xl;
+  }
+  .glass-card-hover {
+    @apply glass-card transition-all duration-300 hover:border-indigo-500/40 hover:shadow-indigo-500/10 hover:shadow-2xl;
+  }
+  .gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-violet-400 to-purple-400;
+  }
+  .btn-primary {
+    @apply px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500
+           text-white font-semibold rounded-xl transition-all duration-200 shadow-lg shadow-indigo-500/25
+           active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply px-5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-slate-500
+           text-slate-200 font-medium rounded-xl transition-all duration-200 active:scale-95;
+  }
+  .section-label {
+    @apply text-xs font-bold text-slate-500 uppercase tracking-widest mb-3;
+  }
+  .chart-title {
+    @apply text-sm font-semibold text-slate-300;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  .badge-indigo { @apply badge bg-indigo-500/20 text-indigo-300 border border-indigo-500/30; }
+  .badge-green  { @apply badge bg-emerald-500/20 text-emerald-300 border border-emerald-500/30; }
+  .badge-amber  { @apply badge bg-amber-500/20 text-amber-300 border border-amber-500/30; }
+  .badge-red    { @apply badge bg-red-500/20 text-red-300 border border-red-500/30; }
+  .badge-cyan   { @apply badge bg-cyan-500/20 text-cyan-300 border border-cyan-500/30; }
+}
+
+/* Recharts tooltip customization */
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: #1e293b !important;
+  border: 1px solid #475569 !important;
+  border-radius: 12px !important;
+  color: #f1f5f9 !important;
+}
+.recharts-tooltip-item { color: #cbd5e1 !important; }
+.recharts-cartesian-axis-tick-value { fill: #64748b !important; }
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line { stroke: #1e293b !important; }
