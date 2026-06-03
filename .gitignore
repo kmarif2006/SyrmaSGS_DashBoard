@@ -1,0 +1,38 @@
+# Dependency directories
+node_modules/
+frontend/node_modules/
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+
+# Build outputs
+dist/
+build/
+frontend/dist/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Large Data Files
+*.csv
+*.xlsx
+*.xls
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
