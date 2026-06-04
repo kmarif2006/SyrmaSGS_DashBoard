@@ -605,6 +605,127 @@ def export_csv():
     return send_file(io.BytesIO(output.getvalue().encode("utf-8")), mimetype="text/csv", as_attachment=True, download_name="procurement_audit_export.csv")
 
 
+
+@app.route("/api/chat", methods=["POST"])
+def chat():
+    data = request.json or {}
+    user_message = data.get("message", "")
+    history = data.get("history", [])
+    filters = data.get("filters", {})
+
+    system_prompt = (
+        "You are the Syrma SGS Procurement Analytics Assistant, an AI chatbot built to help "
+        "users analyze and understand their procurement, purchase orders, and supplier data.\n\n"
+        "Here is the current state of the procurement data in the system:\n"
+    )
+
+    df = store.get("merged_df")
+    if df is not None:
+        try:
+            # Apply active filters if any
+            if filters:
+                df = apply_filters(df, filters)
+            
+            total_spend = safe_float(df["Total_Spend_INR"].sum())
+            total_open = safe_float(df["Open_Value_INR"].sum())
+            efficiency = round((1 - (total_open / total_spend) if total_spend > 0 else 1) * 100, 2)
+            pos = int(df["Purchasing Document"].nunique())
+            
+            sup_col = "Name of Supplier" if "Name of Supplier" in df.columns else "Supplier/Supplying Plant"
+            suppliers = int(df[sup_col].nunique()) if sup_col in df.columns else 0
+            
+            search_col = "Short Text" if "Short Text" in df.columns else "Material"
+            materials = int(df[search_col].nunique()) if search_col in df.columns else 0
+            
+            # Top 5 Suppliers by Spend
+            top_sups = df.groupby(sup_col)["Total_Spend_INR"].sum().sort_values(ascending=False).head(5)
+            top_sups_str = "\n".join([f"- {sup}: ₹{val/1e7:.2f} Cr" for sup, val in top_sups.items()])
+            
+            # Top 5 Plants by Spend
+            top_plants = df.groupby("Plant")["Total_Spend_INR"].sum().sort_values(ascending=False).head(5)
+            top_plants_str = "\n".join([f"- Plant {plant}: ₹{val/1e7:.2f} Cr" for plant, val in top_plants.items()])
+
+            # Top 5 Materials by Spend
+            top_mats = df.groupby(search_col)["Total_Spend_INR"].sum().sort_values(ascending=False).head(5)
+            top_mats_str = "\n".join([f"- {mat}: ₹{val/1e7:.2f} Cr" for mat, val in top_mats.items()])
+
+            system_prompt += f"""
+[FILTERED STATE] (Reflecting dashboard filters: {filters if filters else 'None'})
+- Total Spend: ₹{total_spend/1e7:.2f} Cr (INR)
+- Total Open PO Value: ₹{total_open/1e7:.2f} Cr (INR)
+- Procurement Efficiency: {efficiency:.2f}%
+- Total Unique Purchase Orders (POs): {pos}
+- Total Active Suppliers: {suppliers}
+- Total Unique Materials (SKUs): {materials}
+
+Top 5 Suppliers by Spend:
+{top_sups_str}
+
+Top 5 Plants by Spend:
+{top_plants_str}
+
+Top 5 Materials by Spend:
+{top_mats_str}
+"""
+        except Exception as e:
+            traceback.print_exc()
+            system_prompt += f"\n(Error compiling data context: {str(e)})\n"
+    else:
+        system_prompt += (
+            "\n[NO DATA DATASET LOADED]\n"
+            "No CSV files have been uploaded and merged yet. Please inform the user that they "
+            "need to upload the Transaction CSV (Sheet 1) and Master CSV (Sheet 2) and click 'Merge Data' "
+            "before you can analyze specific data for them.\n"
+        )
+
+    system_prompt += """
+Guidelines:
+1. Answer the user's questions about the procurement data based on the provided stats.
+2. If the user asks about a specific detail or chart, guide them to locate it on the dashboard (e.g. 'You can see the Monthly Spend Evolution chart for the trend over time' or 'The Pareto chart shows supplier concentration').
+3. Keep answers concise, actionable, and formatted in clean markdown. Use ₹ for Rupees and state values in Crores (Cr) or Lakhs (L) where appropriate.
+4. If you don't know the answer or the data isn't in the context, tell the user that but offer to help with general procurement interpretation or advice.
+"""
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in history:
+        messages.append({
+            "role": msg.get("role"),
+            "content": msg.get("content")
+        })
+    messages.append({"role": "user", "content": user_message})
+
+    payload = {
+        "model": "qwen3:8b",
+        "messages": messages,
+        "stream": False
+    }
+
+    try:
+        import json
+        import urllib.request
+        import urllib.error
+
+        req = urllib.request.Request(
+            "http://localhost:11434/api/chat",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=60) as response:
+            res_data = json.loads(response.read().decode("utf-8"))
+            reply = res_data.get("message", {}).get("content", "")
+            return jsonify({"reply": reply})
+    except urllib.error.URLError as e:
+        print(f"Ollama connection error: {e}")
+        return jsonify({
+            "reply": "I couldn't connect to your local Ollama server. Please verify that Ollama is running and has the `qwen3:8b` model pulled (`ollama run qwen3:8b`)."
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"reply": f"An error occurred while calling the local model: {str(e)}"}), 500
+
+
 if __name__ == "__main__":
     print("Syrma Procurement Analytics -- Backend starting on http://localhost:5000")
     app.run(debug=True, port=5000, host="0.0.0.0")
+
