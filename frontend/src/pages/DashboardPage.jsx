@@ -19,6 +19,8 @@ import NavBar from '../components/NavBar'
 import GlobalFilters from '../components/GlobalFilters'
 import KPICard from '../components/KPICard'
 import AIInsights from '../components/AIInsights'
+import ChatBot from '../components/ChatBot'
+
 
 // Charts
 import SupplierChart from '../components/charts/SupplierChart'
@@ -264,6 +266,7 @@ export default function DashboardPage() {
         </section>
 
       </main>
+      <ChatBot filters={filters} />
     </div>
   )
 }

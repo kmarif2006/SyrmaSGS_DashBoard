@@ -49,7 +49,9 @@ export const fetchPareto               = (p) => api.get('/pareto', { params: p }
 export const fetchMonthlyCompanyTrend  = (p) => api.get('/monthly-company-trend', { params: p }).then(r => r.data)
 export const fetchAIInsights           = (p) => api.get('/ai-insights', { params: p }).then(r => r.data)
 export const fetchSearch               = (q) => api.get('/search', { params: { q } }).then(r => r.data)
+export const fetchChat                 = (message, history, filters) => api.post('/chat', { message, history, filters }).then(r => r.data)
 export const getExportUrl              = (params) => {
   const qs = new URLSearchParams(params).toString()
   return `/api/export${qs ? '?' + qs : ''}`
 }
+
