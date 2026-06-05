@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { fetchSearch, getExportUrl } from '../lib/api'
 import { truncate } from '../lib/utils'
@@ -11,7 +11,11 @@ export default function NavBar({ filters, onSearchResult }) {
   const [showResults, setShowResults] = useState(false)
   const [exporting, setExporting] = useState(false)
   const navigate = useNavigate()
+  const location = useLocation()
   const inputRef = useRef()
+  
+  const isGrirActive = location.pathname === '/grir'
+  const isDashboardActive = location.pathname === '/dashboard'
 
   const { data: results = [], isLoading } = useQuery({
     queryKey: ['search', query],
@@ -46,6 +50,32 @@ export default function NavBar({ filters, onSearchResult }) {
             <p className="text-[10px] text-slate-500 leading-none mt-0.5">Procurement Analytics</p>
           </div>
         </button>
+
+        {/* Navigation Tabs */}
+        {location.pathname !== '/' && (
+          <div className="hidden md:flex items-center gap-1.5 ml-4 bg-slate-900/40 p-1 border border-slate-800/40 rounded-xl">
+            <button
+              onClick={() => navigate('/dashboard')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                isDashboardActive 
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' 
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Spend Analytics
+            </button>
+            <button
+              onClick={() => navigate('/grir')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                isGrirActive 
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' 
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              GR/IR Reconciliation
+            </button>
+          </div>
+        )}
 
         {/* Search box */}
         <div className="flex-1 max-w-xl relative">
@@ -100,14 +130,16 @@ export default function NavBar({ filters, onSearchResult }) {
             {exporting ? "Generating..." : "Executive PDF"}
           </button>
           
-          <a
-            href={exportUrl}
-            download
-            className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600/10 hover:bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-xs font-medium transition-all"
-          >
-            <Download size={13} />
-            CSV Data
-          </a>
+          {!isGrirActive && (
+            <a
+              href={exportUrl}
+              download
+              className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600/10 hover:bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-xs font-medium transition-all"
+            >
+              <Download size={13} />
+              CSV Data
+            </a>
+          )}
           <button
             onClick={() => navigate('/')}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-slate-200 text-xs font-medium transition-all"

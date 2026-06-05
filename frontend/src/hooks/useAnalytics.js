@@ -5,6 +5,7 @@ import {
   fetchPlantAnalysis, fetchPurchasingGroup, fetchItemCategory,
   fetchAging, fetchDeliveryAnalysis, fetchCurrencyExposure,
   fetchPareto, fetchMonthlyCompanyTrend, fetchAIInsights, fetchFilters, fetchStatus,
+  fetchGrirSummary, fetchGrirItems,
 } from '../lib/api'
 
 const makeOpts = (key, fn, params, extra = {}) => ({
@@ -31,3 +32,5 @@ export const useCurrency    = (p) => useQuery(makeOpts('currency', fetchCurrency
 export const usePareto      = (p) => useQuery(makeOpts('pareto', fetchPareto, p))
 export const useCompanyTrend = (p) => useQuery(makeOpts('companyTrend', fetchMonthlyCompanyTrend, p))
 export const useAIInsights  = (p) => useQuery(makeOpts('insights', fetchAIInsights, p, { staleTime: 60 * 1000 }))
+export const useGrirSummary = () => useQuery({ queryKey: ['grirSummary'], queryFn: fetchGrirSummary, staleTime: 5 * 60 * 1000 })
+export const useGrirItems   = (p) => useQuery({ queryKey: ['grirItems', p], queryFn: () => fetchGrirItems(p) })
