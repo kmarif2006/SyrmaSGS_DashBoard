@@ -1,0 +1,47 @@
+{
+  "classification_rules": {
+    "GR_TRANS_TYPES": ["1"],
+    "IR_TRANS_TYPES": ["2"],
+    "DEBIT_INDICATORS": ["S"],
+    "CREDIT_INDICATORS": ["H"]
+  },
+  "aging_buckets": [30, 60, 90, 180],
+  "reconciliation_tolerance": 0.01,
+  "price_variance_threshold": 1.0,
+  "risk_weights": {
+    "vendor": { "exposure": 0.40, "aging": 0.30, "reconciliation": 0.20, "variance": 0.10 },
+    "material": { "exposure": 0.40, "aging": 0.30, "reconciliation": 0.20, "variance": 0.10 },
+    "plant": { "exposure": 0.40, "aging": 0.30, "reconciliation": 0.30, "variance": 0.0 }
+  },
+  "exposure_risk_tiers": {
+    "low": 5,
+    "medium": 10,
+    "high": 20
+  },
+  "aging_risk_tiers": {
+    "low": 30,
+    "medium": 60,
+    "high": 90
+  },
+  "reconciliation_risk_tiers": {
+    "low": 95,
+    "medium": 90,
+    "high": 80
+  },
+  "variance_risk_tiers": {
+    "low": 2,
+    "medium": 5,
+    "high": 10
+  },
+  "composite_risk_tiers": {
+    "low": 25,
+    "medium": 50,
+    "high": 75
+  },
+  "insight_thresholds": {
+    "vendor_concentration_pct": 20,
+    "reconciliation_rate_pct": 90,
+    "over_invoice_val_inr": 10000,
+    "aging_exposure_pct": 10
+  }
+}

@@ -1,9 +1,11 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { 
   useGrirSummary, 
   useGrirItems 
 } from '../hooks/useAnalytics'
 import NavBar from '../components/NavBar'
+import { uploadGrirFile, fetchGrirUploadMetadata } from '../lib/api'
 import { 
   BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell
@@ -29,7 +31,12 @@ import {
   Activity,
   Package,
   RefreshCw,
-  Percent
+  Percent,
+  Upload,
+  Loader2,
+  RotateCcw,
+  BarChart3,
+  BookOpen
 } from 'lucide-react'
 
 // Colors for charts
@@ -69,8 +76,136 @@ function GrirKPICard({ title, value, sub, icon: Icon, colorClass, isLoading }) {
   )
 }
 
+// ── Upload Zone Component ─────────────────────────────────────────────────────
+function GrirUploadZone({ onUploadSuccess }) {
+  const [dragging, setDragging] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [metadata, setMetadata] = useState(null)
+  const [error, setError] = useState(null)
+  const inputRef = useRef()
+
+  // Load existing metadata on mount
+  useState(() => {
+    fetchGrirUploadMetadata()
+      .then(d => setMetadata(d))
+      .catch(() => {})
+  }, [])
+
+  const handleFile = useCallback(async (file) => {
+    if (!file) return
+    const ext = file.name.split('.').pop().toLowerCase()
+    if (!['csv', 'xlsx', 'xls'].includes(ext)) {
+      setError('Only CSV, XLS, or XLSX files are accepted.')
+      return
+    }
+    setError(null)
+    setUploading(true)
+    setProgress(0)
+    try {
+      const res = await uploadGrirFile(file, p => setProgress(p))
+      setMetadata(res.data.metadata)
+      onUploadSuccess()
+    } catch (err) {
+      setError(err.response?.data?.error || 'Upload failed. Please try again.')
+    } finally {
+      setUploading(false)
+    }
+  }, [onUploadSuccess])
+
+  const onDrop = useCallback((e) => {
+    e.preventDefault()
+    setDragging(false)
+    const file = e.dataTransfer.files[0]
+    handleFile(file)
+  }, [handleFile])
+
+  const onInputChange = useCallback((e) => {
+    handleFile(e.target.files[0])
+  }, [handleFile])
+
+  return (
+    <div className="glass-card p-5 border border-slate-800/60">
+      <div className="flex flex-col lg:flex-row gap-5 items-start lg:items-center">
+        {/* Drop Zone */}
+        <div
+          onDragOver={e => { e.preventDefault(); setDragging(true) }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={onDrop}
+          onClick={() => !uploading && inputRef.current?.click()}
+          className={`flex-shrink-0 w-full lg:w-72 flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 border-dashed transition-all cursor-pointer ${
+            dragging
+              ? 'border-indigo-500 bg-indigo-500/5 scale-[1.01]'
+              : uploading
+              ? 'border-slate-700 bg-slate-900/40 cursor-wait'
+              : 'border-slate-700/50 hover:border-indigo-500/40 hover:bg-indigo-500/3'
+          }`}
+        >
+          <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={onInputChange} />
+          <div className={`p-3 rounded-xl border transition-colors ${
+            uploading ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400' : 'bg-slate-800 border-slate-700 text-slate-400'
+          }`}>
+            {uploading ? <Loader2 size={22} className="animate-spin" /> : <Upload size={22} />}
+          </div>
+          {uploading ? (
+            <div className="w-full space-y-1.5">
+              <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${progress}%` }} />
+              </div>
+              <p className="text-[10px] text-center text-indigo-400 font-black uppercase tracking-widest">Processing {progress}% — Running reconciliation engine…</p>
+            </div>
+          ) : (
+            <>
+              <p className="text-xs font-bold text-slate-300 text-center">Drop GRIR CSV / XLSX here</p>
+              <p className="text-[10px] text-slate-500 text-center">or click to browse · CSV, XLS, XLSX</p>
+            </>
+          )}
+        </div>
+
+        {/* Metadata Panel */}
+        <div className="flex-1 space-y-2">
+          <div className="flex items-center gap-2 mb-1">
+            <BookOpen size={14} className="text-indigo-400" />
+            <p className="text-xs font-black text-slate-400 uppercase tracking-wider">Active Dataset</p>
+          </div>
+          {metadata ? (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { label: 'File Name', value: metadata.file_name, mono: false },
+                { label: 'Records', value: (metadata.num_records || 0).toLocaleString(), mono: true },
+                { label: 'PO Count', value: (metadata.num_pos || 0).toLocaleString(), mono: true },
+                { label: 'Uploaded', value: metadata.upload_date || 'Pre-loaded', mono: false },
+              ].map(m => (
+                <div key={m.label} className="bg-slate-900/50 border border-slate-800/60 rounded-xl p-3">
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">{m.label}</p>
+                  <p className={`text-xs font-black text-slate-200 mt-0.5 truncate ${m.mono ? 'font-mono' : ''}`}>{m.value}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">No dataset loaded. Upload a GRIR file to begin reconciliation analysis.</p>
+          )}
+          {error && (
+            <div className="flex items-center gap-2 text-xs text-red-400 bg-red-500/5 border border-red-500/20 rounded-xl px-3 py-2 mt-2">
+              <AlertCircle size={13} />{error}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main Dashboard Component ───────────────────────────────────────────────────
 export default function GrirDashboard() {
-  const { data: summary, isLoading: isSummaryLoading, error: summaryError } = useGrirSummary()
+  const queryClient = useQueryClient()
+  const { data: summary, isLoading: isSummaryLoading, error: summaryError, refetch: refetchSummary } = useGrirSummary()
+
+  const handleUploadSuccess = useCallback(() => {
+    // Invalidate GRIR queries so the dashboard auto-refreshes with new data
+    queryClient.invalidateQueries({ queryKey: ['grirSummary'] })
+    queryClient.invalidateQueries({ queryKey: ['grirItems'] })
+  }, [queryClient])
 
   // Tab state
   const [activeTab, setActiveTab] = useState('overview')
@@ -210,25 +345,41 @@ export default function GrirDashboard() {
   const renderOverview = () => {
     return (
       <div className="space-y-10 animate-fadeIn">
-        {/* KPIs Section */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-          <GrirKPICard 
+        {/* KPIs Section — 8 cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          <GrirKPICard
             title="Reconciliation Rate"
             value={summary?.kpis ? formatPct(summary.kpis.reconciliation_rate) : '--'}
-            sub={`${summary?.kpis ? safeLocaleString(summary.kpis.reconciled_count) : '--'} / ${summary?.kpis ? safeLocaleString(summary.kpis.total_po_items) : '--'} PO lines reconciled`}
+            sub={`${summary?.kpis ? safeLocaleString(summary.kpis.reconciled_count) : '--'} / ${summary?.kpis ? safeLocaleString(summary.kpis.total_po_items) : '--'} PO lines`}
             icon={CheckCircle2}
             colorClass="text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
             isLoading={isSummaryLoading}
           />
-          <GrirKPICard 
+          <GrirKPICard
             title="Total Open Exposure"
             value={summary?.kpis ? formatINR(summary.kpis.total_open_value) : '--'}
-            sub="Net accrual & variance value"
+            sub="Net GR minus IR value"
             icon={DollarSign}
             colorClass="text-indigo-400 bg-indigo-500/10 border-indigo-500/20"
             isLoading={isSummaryLoading}
           />
-          <GrirKPICard 
+          <GrirKPICard
+            title="Total GR Value"
+            value={summary?.kpis ? formatINR(summary.kpis.total_gr_value) : '--'}
+            sub="Cumulative goods receipt value"
+            icon={BarChart3}
+            colorClass="text-blue-400 bg-blue-500/10 border-blue-500/20"
+            isLoading={isSummaryLoading}
+          />
+          <GrirKPICard
+            title="Total IR Value"
+            value={summary?.kpis ? formatINR(summary.kpis.total_ir_value) : '--'}
+            sub="Cumulative invoice receipt value"
+            icon={FileText}
+            colorClass="text-violet-400 bg-violet-500/10 border-violet-500/20"
+            isLoading={isSummaryLoading}
+          />
+          <GrirKPICard
             title="Critical Risk Items"
             value={summary?.kpis ? safeLocaleString(summary.kpis.critical_items) : '--'}
             sub="Immediate escalation required"
@@ -236,8 +387,24 @@ export default function GrirDashboard() {
             colorClass="text-red-400 bg-red-500/10 border-red-500/20"
             isLoading={isSummaryLoading}
           />
-          <GrirKPICard 
-            title="Active Vendor pool"
+          <GrirKPICard
+            title="Open PO Count"
+            value={summary?.kpis ? safeLocaleString(summary.kpis.unique_pos) : '--'}
+            sub="Unique POs with open items"
+            icon={BookOpen}
+            colorClass="text-cyan-400 bg-cyan-500/10 border-cyan-500/20"
+            isLoading={isSummaryLoading}
+          />
+          <GrirKPICard
+            title="Reversal Count (Val)"
+            value={summary?.kpis ? formatINR(summary.kpis.total_reversals_val) : '--'}
+            sub="Total reversed IR value"
+            icon={RotateCcw}
+            colorClass="text-rose-400 bg-rose-500/10 border-rose-500/20"
+            isLoading={isSummaryLoading}
+          />
+          <GrirKPICard
+            title="Active Vendors"
             value={summary?.kpis ? safeLocaleString(summary.kpis.unique_vendors) : '--'}
             sub="With open GR/IR balances"
             icon={Users}
@@ -1351,7 +1518,10 @@ export default function GrirDashboard() {
       <NavBar />
 
       <main id="dashboard-container" className="max-w-[1600px] mx-auto px-5 pt-8 space-y-8">
-        
+
+        {/* ── GRIR Upload Zone ────────────────────────────────────────────── */}
+        <GrirUploadZone onUploadSuccess={handleUploadSuccess} />
+
         {/* Title Block */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-slate-900">
           <div>
@@ -1370,21 +1540,29 @@ export default function GrirDashboard() {
               Real-time 3-way match audit anomalies between Goods Receipt (GR) and Invoice Receipt (IR) lines. Matches EKKO, ME2N and GRIR ledgers.
             </p>
           </div>
-          
+
           <div className="flex items-center gap-4 bg-slate-900/60 border border-slate-800/80 px-4 py-3 rounded-2xl">
             <div className="text-right">
-              <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">Scope Coverage</p>
+              <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">GRIR Rows</p>
               <p className="text-sm font-bold text-slate-200 mt-0.5">
-                {summary?.metadata ? `${safeLocaleString(summary.metadata.grir_row_count)} GR/IR rows` : '--'}
+                {summary?.metadata ? `${safeLocaleString(summary.metadata.grir_row_count)}` : '--'}
               </p>
             </div>
             <div className="w-px h-8 bg-slate-800" />
             <div className="text-right">
-              <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest font-mono">PO Line Items</p>
+              <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest font-mono">PO Lines</p>
               <p className="text-sm font-bold text-indigo-400 mt-0.5">
-                {summary?.metadata ? `${safeLocaleString(summary.metadata.me2n_row_count)} items` : '--'}
+                {summary?.metadata ? `${safeLocaleString(summary.metadata.me2n_row_count)}` : '--'}
               </p>
             </div>
+            <div className="w-px h-8 bg-slate-800" />
+            <button
+              onClick={() => refetchSummary()}
+              title="Refresh dashboard data"
+              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-slate-200 transition-all"
+            >
+              <RotateCcw size={15} />
+            </button>
           </div>
         </div>
 
