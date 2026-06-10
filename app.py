@@ -15,11 +15,14 @@ import traceback
 import urllib.request
 import urllib.error
 import os
-import subprocess
 from datetime import datetime
+from services.grir_analytics_service import GRIRAnalyticsService
 
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"])
+
+# ─── GR/IR Analytics Service ─────────────────────────────────────────────────
+grir_service = GRIRAnalyticsService()
 
 # ─── Global In-Memory Store ──────────────────────────────────────────────────
 store = {
@@ -177,6 +180,19 @@ def upload_transactions():
     if not file.filename.lower().endswith(".csv"):
         return jsonify({"error": "Only .csv files are accepted"}), 400
     try:
+        # Save to disk as me2n.csv, gracefully handle permission errors if file is locked
+        file_path = os.path.join(os.path.dirname(__file__), "me2n.csv")
+        try:
+            file_bytes = file.read()
+            with open(file_path, "wb") as f:
+                f.write(file_bytes)
+        except PermissionError:
+            print(f"Permission denied writing to {file_path}. It might be open in another program.")
+        except Exception as e:
+            print(f"Failed to write to {file_path}: {e}")
+        finally:
+            file.seek(0)
+
         # Using low_memory=False for large data
         df = pd.read_csv(file, encoding="utf-8", low_memory=False)
         if df.empty:
@@ -194,6 +210,13 @@ def upload_transactions():
         store["transaction_df"] = df
         store["transaction_filename"] = file.filename
         store["merged_df"] = None  # Invalidate merge
+        
+        # Sync with GRIR Service
+        try:
+            grir_service.upload_df(df, "me2n.csv")
+        except Exception as e:
+            print(f"Warning: Failed to sync with GRIR service: {e}")
+
         return jsonify({
             "message": "Transaction data uploaded successfully",
             "filename": file.filename,
@@ -213,6 +236,19 @@ def upload_master():
     if not file.filename.lower().endswith(".csv"):
         return jsonify({"error": "Only .csv files are accepted"}), 400
     try:
+        # Save to disk as EKKO.csv, gracefully handle permission errors
+        file_path = os.path.join(os.path.dirname(__file__), "EKKO.csv")
+        try:
+            file_bytes = file.read()
+            with open(file_path, "wb") as f:
+                f.write(file_bytes)
+        except PermissionError:
+            print(f"Permission denied writing to {file_path}. It might be open in another program.")
+        except Exception as e:
+            print(f"Failed to write to {file_path}: {e}")
+        finally:
+            file.seek(0)
+
         df = pd.read_csv(file, encoding="utf-8", low_memory=False)
         if df.empty:
             return jsonify({"error": "Uploaded file is empty"}), 400
@@ -224,6 +260,13 @@ def upload_master():
         store["master_df"] = df
         store["master_filename"] = file.filename
         store["merged_df"] = None  # Invalidate merge
+        
+        # Sync with GRIR Service
+        try:
+            grir_service.upload_df(df, "EKKO.csv")
+        except Exception as e:
+            print(f"Warning: Failed to sync with GRIR service: {e}")
+
         return jsonify({
             "message": "Master data uploaded successfully",
             "filename": file.filename,
@@ -729,640 +772,159 @@ Guidelines:
         traceback.print_exc()
         return jsonify({"reply": f"An error occurred while calling the local model: {str(e)}"}), 500
 
-# ─── GR/IR Reconciliation Endpoints ──────────────────────────────────────────
-
-GRIR_DATA_CACHE = None
-
-def get_grir_data():
-    global GRIR_DATA_CACHE
-    if GRIR_DATA_CACHE is None:
-        file_path = r"c:\SyrmaSGS_DashBoard\grir_analysis_output.json"
-        if not os.path.exists(file_path):
-            return None
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                GRIR_DATA_CACHE = json.load(f)
-        except Exception as e:
-            print(f"Error loading GRIR analysis file: {e}")
-            return None
-    return GRIR_DATA_CACHE
+# ─── GR/IR Reconciliation Endpoints (Service Layer) ──────────────────────────
 
 
 @app.route("/api/grir/summary", methods=["GET"])
+@app.route("/grir/summary", methods=["GET"])
 def grir_summary():
-    data = get_grir_data()
-    if not data:
-        return jsonify({"error": "GR/IR Analysis output not found. Please run the analysis first."}), 404
-    
-    # Exclude 'all_items' to avoid large payload sizes
-    summary_data = {k: v for k, v in data.items() if k != "all_items"}
-    return jsonify(summary_data)
+    """Return full GR/IR dashboard payload (excluding all_items for performance)."""
+    if not grir_service.has_data():
+        return jsonify({"success": False, "error": "GR/IR Analysis data not found. Please upload GRIR, EKKO, and ME2N files."}), 404
+    dashboard = grir_service.get_dashboard()
+    if not dashboard:
+        return jsonify({"success": False, "error": "GR/IR Analysis data not found. Please upload SAP files and run the reconciliation engine."}), 404
+    return jsonify(dashboard)
+
+
+@app.route("/api/grir/dashboard", methods=["GET"])
+@app.route("/grir/dashboard", methods=["GET"])
+def grir_dashboard():
+    """Return the full GR/IR dashboard analytics payload."""
+    if not grir_service.has_data():
+        return jsonify({"success": False, "error": "GR/IR Analysis data not found. Please upload GRIR, EKKO, and ME2N files."}), 404
+    dashboard = grir_service.get_dashboard()
+    if not dashboard:
+        return jsonify({"success": False, "error": "GR/IR Analysis data not found."}), 404
+    return jsonify(dashboard)
 
 
 @app.route("/api/grir/items", methods=["GET"])
+@app.route("/grir/items", methods=["GET"])
 def grir_items():
-    data = get_grir_data()
-    if not data:
-        return jsonify({"error": "GR/IR Analysis output not found. Please run the analysis first."}), 404
-    
-    all_items = data.get("all_items", [])
-    
-    # Fetch parameters
+    """Return paginated, filtered, sorted GR/IR items."""
+    if not grir_service.has_data():
+        return jsonify({"success": False, "error": "GR/IR Analysis data not found.", "items": [], "total": 0, "page": 1, "pages": 1, "limit": 50}), 200
     page = int(request.args.get("page", 1))
     limit = int(request.args.get("limit", 50))
-    search = request.args.get("search", "").strip().lower()
+    search = request.args.get("search", "").strip()
     status = request.args.get("status", "").strip()
     risk_level = request.args.get("risk_level", "").strip()
     plant = request.args.get("plant", "").strip()
     sort_by = request.args.get("sortBy", "risk_score").strip()
     sort_order = request.args.get("sortOrder", "desc").strip()
-    
-    # Apply filtering
-    filtered_items = all_items
-    
-    if search:
-        filtered_items = [
-            item for item in filtered_items
-            if search in str(item.get("PO Number", "")).lower() or
-               search in str(item.get("Vendor", "")).lower() or
-               search in str(item.get("Short Text", "")).lower()
-        ]
-        
-    if status:
-        filtered_items = [item for item in filtered_items if item.get("status") == status]
-        
-    if risk_level:
-        filtered_items = [item for item in filtered_items if item.get("risk_level") == risk_level]
-        
-    if plant:
-        filtered_items = [item for item in filtered_items if str(item.get("Plant", "")) == plant]
-        
-    # Apply sorting
-    if sort_by:
-        reverse = (sort_order == "desc")
-        
-        def get_sort_key(item):
-            val = item.get(sort_by)
-            if val is None:
-                # Fallbacks for types
-                return "" if isinstance(val, str) else 0
-            # Numeric fields
-            if sort_by in ["net_gr_qty", "net_gr_val", "net_ir_qty", "net_ir_val", "open_qty", "open_val", "risk_score", "days_open", "inv_completion_pct", "reversal_pct", "price_var_pct", "price_var_abs"]:
-                try:
-                    return float(val)
-                except (ValueError, TypeError):
-                    return 0.0
-            return str(val).lower()
-            
-        try:
-            filtered_items = sorted(filtered_items, key=get_sort_key, reverse=reverse)
-        except Exception as e:
-            print(f"Sorting error: {e}")
-            
-    # Apply pagination
-    total = len(filtered_items)
-    start = (page - 1) * limit
-    end = start + limit
-    paginated_items = filtered_items[start:end]
-    
-    pages = math.ceil(total / limit) if limit > 0 else 1
-    
-    return jsonify({
-        "items": paginated_items,
-        "total": total,
-        "page": page,
-        "pages": pages,
-        "limit": limit
-    })
+    result = grir_service.get_items(page, limit, search, status, risk_level, plant, sort_by, sort_order)
+    return jsonify(result)
 
 
 
-# ─── SAP Column Detection & Mapping ──────────────────────────────────────────
-
-SAP_COLUMN_MAP = {
-    # PO Number
-    'po number': 'PO Number',
-    'po_number': 'PO Number',
-    'po no': 'PO Number',
-    'po_no': 'PO Number',
-    'purchase order': 'PO Number',
-    'purchase_order': 'PO Number',
-    'ebeln': 'PO Number',
-    
-    # PO Item
-    'po item': 'PO Item',
-    'po_item': 'PO Item',
-    'item': 'PO Item',
-    'po_item_no': 'PO Item',
-    'ebelp': 'PO Item',
-    
-    # Material Number
-    'material number': 'Material Number',
-    'material_number': 'Material Number',
-    'material_no': 'Material Number',
-    'material no': 'Material Number',
-    'matnr': 'Material Number',
-    
-    # Material Description
-    'material description': 'Material Description',
-    'material_description': 'Material Description',
-    'material text': 'Material Description',
-    'short text': 'Material Description',
-    'txz01': 'Material Description',
-    
-    # Vendor
-    'vendor': 'Vendor',
-    'supplier': 'Vendor',
-    'supplier name': 'Vendor',
-    'name of supplier': 'Vendor',
-    'lifnr': 'Vendor',
-    
-    # Plant
-    'plant': 'Plant',
-    'werks': 'Plant',
-    
-    # Company Code
-    'company code': 'Company Code',
-    'company_code': 'Company Code',
-    'bukrs': 'Company Code',
-    
-    # Currency
-    'currency': 'Waers',
-    'waers': 'Waers',
-    
-    # Posting Date
-    'posting date': 'Posting Date',
-    'posting_date': 'Posting Date',
-    'budat': 'Posting Date',
-    
-    # Document Date
-    'document date': 'Document Date',
-    'document_date': 'Document Date',
-    'bldat': 'Document Date',
-    
-    # Quantity
-    'quantity': 'Quantity',
-    'qty': 'Quantity',
-    'menge': 'Quantity',
-    
-    # Amount
-    'amount': 'Amt (LC)',
-    'amt': 'Amt (LC)',
-    'amount in lc': 'Amt (LC)',
-    'amt (lc)': 'Amt (LC)',
-    'amt_lc': 'Amt (LC)',
-    'wrbtr': 'Amt (LC)',
-    'dmbtr': 'Amt (LC)',
-    
-    # Unit Price
-    'unit price': 'Unit Price',
-    'unit_price': 'Unit Price',
-    'price': 'Unit Price',
-    'netpr': 'Unit Price',
-    
-    # Transaction Type
-    'transaction type': 'Trans Type',
-    'transaction_type': 'Trans Type',
-    'trans type': 'Trans Type',
-    'trans_type': 'Trans Type',
-    'vgabe': 'Trans Type',
-    
-    # Debit/Credit Indicator
-    'debit/credit indicator': 'Dr/Cr Ind',
-    'debit_credit_indicator': 'Dr/Cr Ind',
-    'dr/cr ind': 'Dr/Cr Ind',
-    'dr_cr_ind': 'Dr/Cr Ind',
-    'shkzg': 'Dr/Cr Ind',
-    
-    # Movement Type
-    'movement type': 'Movement Type',
-    'movement_type': 'Movement Type',
-    'mvt type': 'Movement Type',
-    'bwart': 'Movement Type',
-    
-    # Document Number
-    'document number': 'Document No',
-    'document_number': 'Document No',
-    'doc no': 'Document No',
-    'doc_no': 'Document No',
-    'belnr': 'Document No',
-    
-    # Doc Type
-    'doc type': 'Doc Type',
-    'doc_type': 'Doc Type',
-    'blart': 'Doc Type',
-    
-    # Doc Item
-    'doc item': 'Doc Item',
-    'doc_item': 'Doc Item',
-    'buzei': 'Doc Item',
-    
-    # Reference Doc
-    'reference doc': 'Reference Doc',
-    'reference_doc': 'Reference Doc',
-    'xblnr': 'Reference Doc',
-}
-
-
-# ─── GR/IR Upload and Dynamic Analysis APIs ──────────────────────────────────
-
-# Helper column maps for upload processing
-GRIR_ALIASES = {
-    'PO Number': ['po number', 'po_number', 'po no', 'po_no', 'purchase order', 'ebeln'],
-    'PO Item': ['po item', 'po_item', 'item', 'ebelp'],
-    'Trans Type': ['trans type', 'trans_type', 'transaction type', 'transaction_type', 'vgabe'],
-    'Dr/Cr Ind': ['dr/cr ind', 'dr_cr_ind', 'debit/credit indicator', 'debit_credit_indicator', 'shkzg'],
-    'Quantity': ['quantity', 'qty', 'menge'],
-    'Amt (FC)': ['amt (fc)', 'amt_fc', 'amount fc', 'amount_fc', 'wrbtr'],
-    'Posting Date': ['posting date', 'posting_date', 'budat'],
-    'Document Date': ['document date', 'document_date', 'bldat'],
-    'Amt (LC)': ['amt (lc)', 'amt_lc', 'amount lc', 'amount_lc', 'dmbtr'],
-    'Plant': ['plant', 'werks']
-}
-
-EKKO_ALIASES = {
-    'Purchasing Document': ['purchasing document', 'purchasing_document', 'purchase order', 'ebeln'],
-    'Company Code': ['company code', 'company_code', 'bukrs'],
-    'Purchasing Doc. Type': ['purchasing doc. type', 'purchasing_doc_type', 'bsart'],
-    'Deletion indicator': ['deletion indicator', 'deletion_indicator', 'loekz'],
-    'Currency': ['currency', 'waers'],
-    'Exchange Rate': ['exchange rate', 'exchange_rate', 'kuras']
-}
-
-ME2N_ALIASES = {
-    'Purchasing Document': ['purchasing document', 'purchasing_document', 'ebeln'],
-    'Short Text': ['short text', 'short_text', 'material description', 'material_description', 'txz01'],
-    'Order Quantity': ['order quantity', 'order_quantity', 'menge'],
-    'Net Price': ['net price', 'net_price', 'netpr'],
-    'Item': ['item', 'ebelp'],
-    'Plant': ['plant', 'werks'],
-    'Net Order Value': ['net order value', 'net_order_value', 'netwr'],
-    'Open value': ['open value', 'open_value', 'still to be delivered (value)', 'still_to_be_delivered_value']
-}
-
-def detect_sap_file_type(df):
-    cols = [str(c).strip().lower() for c in df.columns]
-    # Check EKKO
-    if any(alias in cols for alias in ['exchange rate', 'exchange_rate', 'kuras']):
-        return 'EKKO'
-    # Check GRIR
-    if any(alias in cols for alias in ['trans type', 'trans_type', 'dr/cr ind', 'dr_cr_ind', 'amt (fc)', 'amt_fc']):
-        return 'GRIR'
-    # Check ME2N
-    if any(alias in cols for alias in ['net order value', 'net_order_value', 'still to be delivered (qty)', 'still to be delivered (value)']):
-        return 'ME2N'
-        
-    if 'purchasing document' in cols or 'purchasing_document' in cols:
-        if 'company code' in cols or 'company_code' in cols or 'bukrs' in cols:
-            return 'EKKO'
-        else:
-            return 'ME2N'
-    return None
-
-def align_dataframe_columns(df, required_map, file_type):
-    col_map = {}
-    cols_lower = {str(c).strip().lower(): c for c in df.columns}
-    missing_required = []
-    
-    required_keys = []
-    if file_type == 'GRIR':
-        required_keys = ['PO Number', 'PO Item', 'Trans Type', 'Dr/Cr Ind', 'Quantity', 'Amt (LC)', 'Posting Date']
-    elif file_type == 'EKKO':
-        required_keys = ['Purchasing Document', 'Currency', 'Exchange Rate', 'Company Code', 'Purchasing Doc. Type']
-    elif file_type == 'ME2N':
-        required_keys = ['Purchasing Document', 'Short Text', 'Order Quantity', 'Net Price', 'Item', 'Plant', 'Net Order Value', 'Open value']
-
-    for std_name, aliases in required_map.items():
-        found = False
-        for alias in aliases:
-            if alias in cols_lower:
-                col_map[cols_lower[alias]] = std_name
-                found = True
-                break
-        if not found:
-            if std_name.lower() in cols_lower:
-                col_map[cols_lower[std_name.lower()]] = std_name
-            elif std_name in required_keys:
-                missing_required.append(std_name)
-                
-    if missing_required:
-        raise ValueError(f"Missing required columns for {file_type}: {missing_required}")
-        
-    return df.rename(columns=col_map)
+# ─── GR/IR Upload, Metadata, AI Insights, and Export Endpoints ───────────────
 
 
 @app.route("/grir/upload", methods=["POST"])
 @app.route("/api/grir/upload", methods=["POST"])
 def grir_upload():
-    global GRIR_DATA_CACHE
+    """Upload a GRIR, EKKO, or ME2N CSV/XLSX file for analysis."""
+    print("[Flask] Received upload request for GR/IR!")
     if "file" not in request.files:
-        return jsonify({"error": "No file part in request"}), 400
+        return jsonify({"success": False, "error": "No file part in request"}), 400
     file = request.files["file"]
+    print(f"[Flask] File received: {file.filename}")
     if not file or not (file.filename.lower().endswith(".csv") or file.filename.lower().endswith(".xlsx") or file.filename.lower().endswith(".xls")):
-        return jsonify({"error": "Only CSV, XLS, and XLSX formats are supported."}), 400
-    
+        return jsonify({"success": False, "error": "Only CSV, XLS, and XLSX formats are supported."}), 400
     try:
-        filename = file.filename
-        print(f"Parsing uploaded file: {filename}")
-        
-        # Read file into DataFrame
-        if filename.lower().endswith(".csv"):
-            df = pd.read_csv(file, low_memory=False)
+        # Save to disk as grir.csv or grir.xlsx to prevent stream hangs
+        file_path = os.path.join(os.path.dirname(__file__), file.filename)
+        try:
+            file_bytes = file.read()
+            with open(file_path, "wb") as f:
+                f.write(file_bytes)
+            print(f"[Flask] Saved {file.filename} to disk successfully.")
+        except PermissionError:
+            print(f"[Flask] Permission denied writing to {file_path}. It might be open in another program.")
+        except Exception as e:
+            print(f"[Flask] Failed to write to {file_path}: {e}")
+        finally:
+            file.seek(0)
+            
+        print("[Flask] Reading file with pandas...")
+        if file.filename.lower().endswith(".csv"):
+            df = pd.read_csv(file_path, encoding="utf-8", low_memory=False)
         else:
-            df = pd.read_excel(file)
+            df = pd.read_excel(file_path)
             
-        if df.empty:
-            return jsonify({"error": "The uploaded file is empty."}), 400
-            
-        # Auto-detect SAP file type
-        file_type = detect_sap_file_type(df)
-        if not file_type:
-            return jsonify({"error": "Unable to auto-detect SAP file type. Check file headers."}), 400
-            
-        print(f"Detected SAP file type: {file_type}")
-        
-        # Map columns & validate
-        if file_type == 'GRIR':
-            df = align_dataframe_columns(df, GRIR_ALIASES, 'GRIR')
-            target_name = "grir.csv"
-            po_col = 'PO Number'
-        elif file_type == 'EKKO':
-            df = align_dataframe_columns(df, EKKO_ALIASES, 'EKKO')
-            target_name = "EKKO.csv"
-            po_col = 'Purchasing Document'
-        elif file_type == 'ME2N':
-            df = align_dataframe_columns(df, ME2N_ALIASES, 'ME2N')
-            target_name = "me2n.csv"
-            po_col = 'Purchasing Document'
-            
-        # Save file to disk
-        target_path = os.path.join(r"c:\SyrmaSGS_DashBoard", target_name)
-        df.to_csv(target_path, index=False)
-        
-        # Run standard reconciliation subprocess to update outputs
-        print("Executing SAP GR/IR Reconciliation engine subprocess...")
-        result = subprocess.run(
-            ["python", "grir_analysis.py"],
-            cwd=r"c:\SyrmaSGS_DashBoard",
-            capture_output=True,
-            text=True
-        )
-        
-        if result.returncode != 0:
-            print(f"Reconciliation engine failure: {result.stderr}")
-            return jsonify({"error": f"SAP Reconciliation process failed: {result.stderr}"}), 500
-            
-        print("Analysis completed successfully. Clearing cache...")
-        GRIR_DATA_CACHE = None
-        
-        # Clear AI insights cache to force regeneration
-        ai_cache_path = r"c:\SyrmaSGS_DashBoard\grir_ai_insights.json"
-        if os.path.exists(ai_cache_path):
-            try:
-                os.remove(ai_cache_path)
-            except Exception:
-                pass
-                
-        # Load the updated reconciled JSON outputs
-        data = get_grir_data()
-        if not data:
-            return jsonify({"error": "Failed to load reconciled data after analysis."}), 500
-            
-        kpis = data.get("kpis", {})
-        metadata = {
-            "file_name": filename,
-            "upload_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "num_records": len(df),
-            "num_pos": kpis.get("unique_pos", df[po_col].nunique() if po_col in df.columns else 0),
-            "num_vendors": kpis.get("unique_vendors", 0),
-            "num_materials": kpis.get("total_materials", 0)
-        }
-        
-        # Cache metadata to disk
-        meta_path = r"c:\SyrmaSGS_DashBoard\grir_upload_metadata.json"
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2)
-            
-        return jsonify({
-            "success": True,
-            "file_name": filename,
-            "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "record_count": len(df),
-            "po_count": int(df[po_col].nunique() if po_col in df.columns else 0),
-            "metadata": metadata
-        })
-        
+        print(f"[Flask] Parsed dataframe with {len(df)} rows. Passing to grir_service.upload_df()...")
+        result = grir_service.upload_df(df, file.filename)
+        print("[Flask] grir_service.upload_df() completed successfully.")
+        return jsonify(result)
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": f"File parsing and reconciliation failed: {str(e)}"}), 500
+        return jsonify({"success": False, "error": f"File parsing and reconciliation failed: {str(e)}"}), 500
 
 
 @app.route("/api/grir/upload/metadata", methods=["GET"])
 def grir_upload_metadata():
-    meta_path = r"c:\SyrmaSGS_DashBoard\grir_upload_metadata.json"
-    if os.path.exists(meta_path):
-        try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                return jsonify(json.load(f))
-        except Exception:
-            pass
-            
-    # Default metadata fallback
-    data = get_grir_data()
-    if data:
-        kpis = data.get("kpis", {})
-        metadata = {
-            "file_name": "grir.csv (Pre-loaded System Default)",
-            "upload_date": "N/A",
-            "num_records": data.get("metadata", {}).get("grir_row_count", 0),
-            "num_pos": kpis.get("unique_pos", 0),
-            "num_vendors": kpis.get("unique_vendors", 0),
-            "num_materials": kpis.get("total_materials", 0)
-        }
-        return jsonify(metadata)
-        
-    return jsonify({
-        "file_name": "None",
-        "upload_date": "N/A",
-        "num_records": 0,
-        "num_pos": 0,
-        "num_vendors": 0,
-        "num_materials": 0
-    })
+    """Return metadata about the currently loaded dataset."""
+    return jsonify(grir_service.get_metadata())
 
-
-# ─── GET /grir & /api/grir — Full Analytics Contract Endpoint ────────────────
-
-@app.route("/grir", methods=["GET"])
-@app.route("/api/grir", methods=["GET"])
-def grir_contract():
-    """
-    Primary GR/IR analytics contract endpoint.
-    Returns the full dynamic analytics payload generated by grir_analysis.py.
-    All KPIs, insights, risks, aging, and vendor/material data are computed
-    deterministically from uploaded SAP files — no hardcoded values.
-    """
-    data = get_grir_data()
-    if not data:
-        return jsonify({
-            "error": "GR/IR Analysis output not found. Please upload SAP files and run the reconciliation engine."
-        }), 404
-
-    kpis = data.get("kpis", {})
-
-    # Merge top-level insight arrays from the pre-computed output
-    deterministic_insights = data.get("deterministic_insights", [])
-    rule_based_risks = data.get("risks", {}).get("rule_based_risks", [])
-
-    payload = {
-        "metadata": data.get("metadata", {}),
-        "kpis": kpis,
-        "reconciliation": data.get("reconciliation", {}),
-        "exposure": data.get("exposure", {}),
-        "aging": data.get("aging", {}),
-        "variance": data.get("variance", {}),
-        "vendor_analytics": data.get("vendor_analytics", {}),
-        "material_analytics": data.get("material_analytics", {}),
-        "risks": data.get("risks", {}),
-        "executive_summary": data.get("executive_summary", {}),
-        "financial_impact": data.get("financial_impact", []),
-        "charts": data.get("charts", {}),
-        # Backward-compat keys consumed by the React dashboard
-        "vendor_insights": data.get("vendor_insights", []),
-        "material_insights": data.get("material_insights", []),
-        "plant_insights": data.get("plant_insights", []),
-        "aging_analysis": data.get("aging_analysis", []),
-        "reversal_analysis": data.get("reversal_analysis", []),
-        "price_variance_analysis": data.get("price_variance_analysis", []),
-        "top_exceptions": data.get("top_exceptions", []),
-        "recommended_actions": data.get("recommended_actions", []),
-        "deterministic_insights": deterministic_insights,
-    }
-    return jsonify(payload)
-
-
-# ─── Deterministic GR/IR AI Insights (rule-based, no external APIs) ──────────
 
 @app.route("/api/grir/ai-insights", methods=["GET"])
 def grir_ai_insights():
-    """
-    Returns rule-based, deterministic insights generated by grir_analysis.py.
-    All insights are pre-computed from SAP data using explicit business rules.
-    No calls to Gemini, Ollama, or any external API are made.
-    """
-    data = get_grir_data()
-    if not data:
-        return jsonify({"error": "GR/IR Analysis output not found. Please run the analysis first."}), 404
-
-    # 1. Pull pre-computed deterministic insights from the analysis output
-    deterministic_insights = data.get("deterministic_insights", [])
-
-    # 2. Build the structured executive_summary from the analysis engine output
-    exec_sum = data.get("executive_summary", {})
-    kpis = data.get("kpis", {})
-    recommended_actions = data.get("recommended_actions", [])
-    financial_impact = data.get("financial_impact", [])
-    vendor_insights = data.get("vendor_insights", [])
-    material_insights = data.get("material_insights", [])
-    plant_insights = data.get("plant_insights", [])
-
-    # 3. Compose the response matching the existing UI contract
-    insights = {
-        "headline": exec_sum.get("headline", "GR/IR Reconciliation Analysis"),
-        "executive_summary": exec_sum.get("detail", ""),
-        "critical_risks": exec_sum.get("risk_flags", []),
-        "vendor_findings": [
-            f"{v['vendor']}: Open exposure INR {v['open_value']:,.0f} ({v['open_pct_total']:.1f}% of total). "
-            f"Dominant status: {v['dominant_status']}. Avg days open: {v['avg_days_open']:.0f}d."
-            for v in vendor_insights[:5]
-            if v.get('open_value', 0) != 0
-        ],
-        "material_findings": [
-            f"{m['material']}: Open balance INR {m['open_value']:,.0f} across {m['item_count']} PO items."
-            for m in material_insights[:5]
-            if m.get('open_value', 0) != 0
-        ],
-        "plant_findings": [
-            f"Plant {p['plant']}: {p['item_count']} items, "
-            f"INR {p['open_value']:,.0f} open, reconciliation rate {p['reconciliation_rate']:.1f}%, "
-            f"exception rate {p['exception_rate']:.1f}%."
-            for p in plant_insights[:3]
-        ],
-        "financial_impact": [
-            f"[{fi['severity']}] {fi['area']}: INR {fi['impact_val']:,.0f} ({fi['impact_cr']:.3f} Cr). {fi['description']}"
-            for fi in financial_impact
-        ],
-        "recommended_actions": [
-            f"[{a['priority']}] {a['category']} — {a['action']} Owner: {a['owner']}. Timeline: {a['timeline']}."
-            for a in recommended_actions
-        ],
-        "deterministic_insights": deterministic_insights,
-        "key_metrics": exec_sum.get("key_metrics", {}),
-    }
-
+    """Return deterministic rule-based insights for GR/IR analysis."""
+    if not grir_service.has_data():
+        return jsonify({"success": False, "error": "GR/IR Analysis output not found. Please run the analysis first."}), 404
+    insights = grir_service.get_ai_insights()
+    if not insights:
+        return jsonify({"success": False, "error": "No insights available."}), 404
     return jsonify(insights)
 
 
-# ─── Report Export endpoints ──────────────────────────────────────────────────
-
 @app.route("/api/grir/export/json", methods=["GET"])
 def grir_export_json():
-    target_path = r"c:\SyrmaSGS_DashBoard\grir_analysis_output.json"
-    if not os.path.exists(target_path):
-        return jsonify({"error": "GR/IR Analysis data not found."}), 404
-    return send_file(target_path, as_attachment=True, download_name="grir_reconciliation_report.json")
+    """Export the full GR/IR analysis payload as JSON."""
+    if not grir_service.has_data():
+        return jsonify({"success": False, "error": "GR/IR Analysis data not found."}), 404
+    dashboard = grir_service.get_dashboard()
+    return jsonify(dashboard)
 
 
 @app.route("/api/grir/export/excel", methods=["GET"])
 def grir_export_excel():
-    data = get_grir_data()
-    if not data:
-        return jsonify({"error": "GR/IR Analysis data not found."}), 404
-        
+    """Generate and download a multi-sheet Excel report."""
+    if not grir_service.has_data():
+        return jsonify({"success": False, "error": "GR/IR Analysis data not found."}), 404
     try:
+        data = grir_service._output
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # 1. KPIs
             kpis = data.get("kpis", {})
             kpis_df = pd.DataFrame(list(kpis.items()), columns=["Metric", "Value"])
             kpis_df.to_excel(writer, sheet_name="KPIs Summary", index=False)
-            
-            # 2. Exceptions
+
             exceptions = data.get("top_exceptions", [])
             if exceptions:
-                exc_df = pd.DataFrame(exceptions)
-                exc_df.to_excel(writer, sheet_name="Top Exceptions", index=False)
-                
-            # 3. Vendors
+                pd.DataFrame(exceptions).to_excel(writer, sheet_name="Top Exceptions", index=False)
+
             vendors = data.get("vendor_insights", [])
             if vendors:
-                vendors_df = pd.DataFrame(vendors)
-                vendors_df.to_excel(writer, sheet_name="Vendor Performance", index=False)
-                
-            # 4. Materials
+                pd.DataFrame(vendors).to_excel(writer, sheet_name="Vendor Performance", index=False)
+
             materials = data.get("material_insights", [])
             if materials:
-                materials_df = pd.DataFrame(materials)
-                materials_df.to_excel(writer, sheet_name="Material Insights", index=False)
-                
-            # 5. Aging
+                pd.DataFrame(materials).to_excel(writer, sheet_name="Material Insights", index=False)
+
             aging = data.get("aging_analysis", [])
             if aging:
-                aging_df = pd.DataFrame(aging)
-                aging_df.to_excel(writer, sheet_name="Aging Analysis", index=False)
-                
-            # 6. Price Variances
+                pd.DataFrame(aging).to_excel(writer, sheet_name="Aging Analysis", index=False)
+
             price_var = data.get("price_variance_analysis", [])
             if price_var:
-                pv_df = pd.DataFrame(price_var)
-                pv_df.to_excel(writer, sheet_name="Price Variances", index=False)
-                
-            # 7. Reversals
+                pd.DataFrame(price_var).to_excel(writer, sheet_name="Price Variances", index=False)
+
             reversals = data.get("reversal_analysis", [])
             if reversals:
-                rev_df = pd.DataFrame(reversals)
-                rev_df.to_excel(writer, sheet_name="Reversals Log", index=False)
-                
+                pd.DataFrame(reversals).to_excel(writer, sheet_name="Reversals Log", index=False)
+
         output.seek(0)
         return send_file(
             io.BytesIO(output.getvalue()),
@@ -1372,458 +934,18 @@ def grir_export_excel():
         )
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": f"Failed to generate Excel sheet: {str(e)}"}), 500
-
-
-@app.route("/api/grir/export/ai-report", methods=["GET"])
-def grir_export_ai_report():
-    data = get_grir_data()
-    if not data:
-        return jsonify({"error": "GR/IR Analysis data not found."}), 404
-        
-    try:
-        ai_resp = grir_ai_insights()
-        ai_data = ai_resp.get_json()
-        
-        md_report = f"""# SAP GR/IR RECONCILIATION AI AUDIT REPORT
-=====================================================
-Generated on: {datetime.now().strftime('%d %B %Y at %H:%M')}
-Organization: Syrma SGS Technology Limited
-Reconciliation Rate: {data.get('kpis', {}).get('reconciliation_rate', 'N/A')}%
-Total Open Exposure: INR {data.get('kpis', {}).get('total_open_value', 0):,}
-
-Headline: {ai_data.get('headline', '')}
-
------------------------------------------------------
-1. EXECUTIVE SYNTHESIS
------------------------------------------------------
-{ai_data.get('executive_summary', '')}
-
------------------------------------------------------
-2. CRITICAL AUDIT RISKS
------------------------------------------------------
-"""
-        for i, risk in enumerate(ai_data.get('critical_risks', []), 1):
-            md_report += f"{i}. {risk}\n"
-            
-        md_report += "\n-----------------------------------------------------\n3. VENDOR FINDINGS\n-----------------------------------------------------\n"
-        for i, find in enumerate(ai_data.get('vendor_findings', []), 1):
-            md_report += f"{i}. {find}\n"
-            
-        md_report += "\n-----------------------------------------------------\n4. MATERIAL FINDINGS\n-----------------------------------------------------\n"
-        for i, find in enumerate(ai_data.get('material_findings', []), 1):
-            md_report += f"{i}. {find}\n"
-            
-        md_report += "\n-----------------------------------------------------\n5. PLANT FINDINGS\n-----------------------------------------------------\n"
-        for i, find in enumerate(ai_data.get('plant_findings', []), 1):
-            md_report += f"{i}. {find}\n"
-            
-        md_report += "\n-----------------------------------------------------\n6. FINANCIAL STATEMENT & WORKING CAPITAL IMPACT\n-----------------------------------------------------\n"
-        for i, imp in enumerate(ai_data.get('financial_impact', []), 1):
-            md_report += f"{i}. {imp}\n"
-            
-        md_report += "\n-----------------------------------------------------\n7. ACTION PRIORITIES CHECKLIST\n-----------------------------------------------------\n"
-        for i, act in enumerate(ai_data.get('recommended_actions', []), 1):
-            md_report += f"{i}. {act}\n"
-            
-        output = io.BytesIO(md_report.encode("utf-8"))
-        return send_file(
-            output,
-            mimetype="text/markdown",
-            as_attachment=True,
-            download_name="grir_ai_audit_report.md"
-        )
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": f"Failed to generate AI report: {str(e)}"}), 500
+        return jsonify({"success": False, "error": f"Failed to generate Excel sheet: {str(e)}"}), 500
 
 
 @app.route("/api/grir/export/pdf", methods=["GET"])
 def grir_export_pdf():
-    """
-    Dynamically generates a multi-section PDF report directly from the
-    grir_analysis_output.json. All tables, KPIs, vendor/material listings,
-    aging breakdowns, risk flags, and recommendations are built from
-    computed data — no hardcoded text or AI-generated content.
-    """
-    data = get_grir_data()
-    if not data:
-        return jsonify({"error": "GR/IR Analysis data not found."}), 404
-
+    """Generate and download a multi-page PDF audit report."""
+    if not grir_service.has_data():
+        return jsonify({"success": False, "error": "GR/IR Analysis data not found."}), 404
     try:
-        from reportlab.lib import colors
-        from reportlab.lib.pagesizes import letter
-        from reportlab.platypus import (
-            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, HRFlowable
-        )
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import inch
-
-        # ── Data extraction ──────────────────────────────────────────────────
-        kpis           = data.get("kpis", {})
-        exec_sum       = data.get("executive_summary", {})
-        aging_data     = data.get("aging_analysis", [])
-        vendor_list    = data.get("vendor_insights", [])[:15]
-        material_list  = data.get("material_insights", [])[:15]
-        plant_list     = data.get("plant_insights", [])
-        exceptions     = data.get("top_exceptions", [])[:20]
-        actions        = data.get("recommended_actions", [])
-        fin_impact     = data.get("financial_impact", [])
-        price_var      = data.get("price_variance_analysis", [])[:15]
-        risk_flags     = data.get("risks", {}).get("rule_based_risks", [])[:10]
-        vendor_risk    = data.get("vendor_analytics", {}).get("vendor_risk_score", [])[:10]
-        material_risk  = data.get("material_analytics", {}).get("material_risk_score", [])[:10]
-        metadata       = data.get("metadata", {})
-        recon_data     = data.get("reconciliation", {})
-        det_insights   = data.get("deterministic_insights", [])
-
-        open_cr = abs(kpis.get("total_open_value", 0)) / 1e7
-        generated_at = datetime.now().strftime("%d %B %Y at %H:%M IST")
-
-        # ── Styles ────────────────────────────────────────────────────────────
-        styles = getSampleStyleSheet()
-        INDIGO   = colors.HexColor('#4f46e5')
-        DARK     = colors.HexColor('#1e1b4b')
-        SLATE    = colors.HexColor('#334155')
-        MUTED    = colors.HexColor('#64748b')
-        RED_BG   = colors.HexColor('#fef2f2')
-        YEL_BG   = colors.HexColor('#fffbeb')
-        GRN_BG   = colors.HexColor('#f0fdf4')
-        HDR_BG   = colors.HexColor('#eef2ff')
-        ROW_ALT  = colors.HexColor('#f8fafc')
-
-        title_style = ParagraphStyle('T', parent=styles['Heading1'], fontSize=20, leading=24,
-            textColor=INDIGO, spaceAfter=4)
-        sub_style   = ParagraphStyle('S', parent=styles['Normal'], fontSize=9, leading=12,
-            textColor=MUTED, spaceAfter=14)
-        h2_style    = ParagraphStyle('H2', parent=styles['Heading2'], fontSize=13, leading=16,
-            textColor=DARK, spaceBefore=14, spaceAfter=6)
-        h3_style    = ParagraphStyle('H3', parent=styles['Heading3'], fontSize=11, leading=13,
-            textColor=DARK, spaceBefore=10, spaceAfter=4)
-        body_style  = ParagraphStyle('B', parent=styles['Normal'], fontSize=9, leading=13,
-            textColor=SLATE, spaceAfter=4)
-        bold_style  = ParagraphStyle('BB', parent=body_style, fontName='Helvetica-Bold')
-        bullet_style= ParagraphStyle('BUL', parent=body_style, leftIndent=12)
-        warn_style  = ParagraphStyle('W', parent=body_style, textColor=colors.HexColor('#b91c1c'))
-        ok_style    = ParagraphStyle('OK', parent=body_style, textColor=colors.HexColor('#15803d'))
-
-        def mk_tbl(rows, col_widths, hdr=True):
-            t = Table(rows, colWidths=col_widths, repeatRows=1 if hdr else 0)
-            style_cmds = [
-                ('BACKGROUND', (0, 0), (-1, 0), HDR_BG),
-                ('TEXTCOLOR',  (0, 0), (-1, 0), DARK),
-                ('FONTNAME',   (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE',   (0, 0), (-1,-1), 8),
-                ('LEADING',    (0, 0), (-1,-1), 11),
-                ('ALIGN',      (0, 0), (-1,-1), 'LEFT'),
-                ('ALIGN',      (1, 1), (-1,-1), 'RIGHT'),
-                ('TOPPADDING', (0, 0), (-1,-1), 3),
-                ('BOTTOMPADDING', (0, 0), (-1,-1), 3),
-                ('LINEBELOW',  (0, 0), (-1,-1), 0.4, colors.HexColor('#e2e8f0')),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, ROW_ALT]),
-            ]
-            t.setStyle(TableStyle(style_cmds))
-            return t
-
-        def fmt_inr(val):
-            try:
-                v = float(val)
-                if abs(v) >= 1e7: return f"₹{v/1e7:.2f} Cr"
-                if abs(v) >= 1e5: return f"₹{v/1e5:.2f} L"
-                return f"₹{v:,.0f}"
-            except Exception:
-                return str(val)
-
-        def p(text, style=None):
-            return Paragraph(str(text), style or body_style)
-
-        pdf_buffer = io.BytesIO()
-        doc = SimpleDocTemplate(
-            pdf_buffer,
-            pagesize=letter,
-            rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40
-        )
-        story = []
-
-        # ╔════════════════════════════════════════════════════════════╗
-        # ║  PAGE 1 — Cover / Executive Summary                       ║
-        # ╚════════════════════════════════════════════════════════════╝
-        story.append(Paragraph("SAP GR/IR Reconciliation Audit Report", title_style))
-        story.append(Paragraph(
-            f"Generated: {generated_at} &nbsp;|&nbsp; "
-            f"Organisation: Syrma SGS Technology Limited &nbsp;|&nbsp; "
-            f"Source Files: GRIR · EKKO · ME2N",
-            sub_style
-        ))
-        story.append(HRFlowable(width="100%", thickness=1, color=INDIGO, spaceAfter=12))
-
-        # Executive headline from analysis engine
-        headline = exec_sum.get("headline", "GR/IR Analysis")
-        story.append(Paragraph(headline, bold_style))
-        story.append(Spacer(1, 6))
-        story.append(Paragraph(exec_sum.get("detail", ""), body_style))
-        story.append(Spacer(1, 10))
-
-        # Risk flags
-        for rf in exec_sum.get("risk_flags", []):
-            story.append(Paragraph(f"⚠ {rf}", warn_style))
-        story.append(Spacer(1, 14))
-
-        # ── Section 1: KPIs ──────────────────────────────────────────
-        story.append(Paragraph("1. Key Performance Indicators", h2_style))
-        status_dist = kpis.get("status_distribution", {})
-        risk_dist   = kpis.get("risk_distribution", {})
-
-        kpi_rows = [
-            [p("Metric", bold_style), p("Value", bold_style), p("Metric", bold_style), p("Value", bold_style)],
-            [p("Total PO Line Items"),  p(f"{kpis.get('total_po_items',0):,}"),
-             p("Reconciliation Rate"),  p(f"{kpis.get('reconciliation_rate',0):.1f}%")],
-            [p("Open Exposure"),         p(fmt_inr(kpis.get('total_open_value',0))),
-             p("Pending Invoice Value"), p(fmt_inr(kpis.get('pending_invoice_val',0)))],
-            [p("Over-Invoice Risk"),     p(fmt_inr(kpis.get('over_invoice_val',0))),
-             p("IR Control Violations"),p(fmt_inr(kpis.get('ir_only_val',0)))],
-            [p("Critical Items"),        p(str(kpis.get('critical_items',0))),
-             p("High Risk Items"),       p(str(kpis.get('high_risk_items',0)))],
-            [p("Unique Vendors"),        p(str(kpis.get('unique_vendors',0))),
-             p("Unique POs"),            p(str(kpis.get('unique_pos',0)))],
-            [p("Total PO Spend"),        p(fmt_inr(kpis.get('total_procurement_spend_inr',0))),
-             p("Total Plants"),          p(str(kpis.get('total_plants',0)))],
-        ]
-        story.append(mk_tbl(kpi_rows, [160, 110, 160, 110]))
-        story.append(Spacer(1, 10))
-
-        # Status distribution mini-table
-        if status_dist:
-            story.append(Paragraph("Status Distribution", h3_style))
-            sd_rows = [[p("Status", bold_style), p("Count", bold_style)]]
-            for status, cnt in sorted(status_dist.items(), key=lambda x: -x[1]):
-                sd_rows.append([p(status), p(str(cnt))])
-            story.append(mk_tbl(sd_rows, [340, 100]))
-
-        story.append(PageBreak())
-
-        # ╔════════════════════════════════════════════════════════════╗
-        # ║  PAGE 2 — Reconciliation & GR/IR Exposure                 ║
-        # ╚════════════════════════════════════════════════════════════╝
-        story.append(Paragraph("2. Reconciliation & GR/IR Exposure Summary", h2_style))
-        story.append(Paragraph(
-            f"Matched Lines: {recon_data.get('matched_lines',0):,} &nbsp;|&nbsp; "
-            f"Unmatched Lines: {recon_data.get('unmatched_lines',0):,} &nbsp;|&nbsp; "
-            f"Reconciliation Rate: {recon_data.get('reconciliation_rate',0):.1f}%",
-            body_style
-        ))
-        story.append(Spacer(1, 8))
-
-        # ── Section 3: Aging Breakdown ────────────────────────────────
-        story.append(Paragraph("3. Aging Breakdown", h2_style))
-        if aging_data:
-            ag_rows = [[p("Bucket", bold_style), p("Total Items", bold_style),
-                        p("Open Items", bold_style), p("Open Value", bold_style),
-                        p("GR Only Val", bold_style), p("IR Only Val", bold_style)]]
-            for a in aging_data:
-                ag_rows.append([
-                    p(a.get("bucket", "")),
-                    p(str(a.get("total_count", 0))),
-                    p(str(a.get("open_count", 0))),
-                    p(fmt_inr(a.get("open_value", 0))),
-                    p(fmt_inr(a.get("gr_only_val", 0))),
-                    p(fmt_inr(a.get("ir_only_val", 0))),
-                ])
-            story.append(mk_tbl(ag_rows, [70, 65, 65, 90, 90, 90]))
-        story.append(Spacer(1, 12))
-
-        # ── Section 4: Financial Impact ───────────────────────────────
-        story.append(Paragraph("4. Financial Statement Impact", h2_style))
-        if fin_impact:
-            fi_rows = [[p("Area", bold_style), p("Severity", bold_style),
-                        p("Value", bold_style), p("Description", bold_style)]]
-            for fi in fin_impact:
-                fi_rows.append([
-                    p(fi.get("area", "")),
-                    p(fi.get("severity", "")),
-                    p(fmt_inr(fi.get("impact_val", 0))),
-                    p(fi.get("description", "")[:120]),
-                ])
-            story.append(mk_tbl(fi_rows, [110, 65, 80, 195]))
-        story.append(PageBreak())
-
-        # ╔════════════════════════════════════════════════════════════╗
-        # ║  PAGE 3 — Vendor Analytics                                ║
-        # ╚════════════════════════════════════════════════════════════╝
-        story.append(Paragraph("5. Top Vendor Exposure Analysis", h2_style))
-        if vendor_list:
-            v_rows = [[p("Vendor", bold_style), p("POs", bold_style), p("GR Value", bold_style),
-                       p("IR Value", bold_style), p("Open Value", bold_style),
-                       p("% Total", bold_style), p("Risk", bold_style)]]
-            for v in vendor_list:
-                v_rows.append([
-                    p(str(v.get("vendor", ""))[:40]),
-                    p(str(v.get("po_count", 0))),
-                    p(fmt_inr(v.get("gr_value", 0))),
-                    p(fmt_inr(v.get("ir_value", 0))),
-                    p(fmt_inr(v.get("open_value", 0))),
-                    p(f"{v.get('open_pct_total', 0):.1f}%"),
-                    p(v.get("risk_level", "")),
-                ])
-            story.append(mk_tbl(v_rows, [130, 30, 70, 70, 70, 45, 50]))
-        story.append(Spacer(1, 12))
-
-        # ── Vendor Risk Scores ────────────────────────────────────────
-        if vendor_risk:
-            story.append(Paragraph("Vendor Risk Scorecard (Top 10)", h3_style))
-            vr_rows = [[p("Vendor", bold_style), p("Exposure", bold_style),
-                        p("Avg Days Open", bold_style), p("Recon Rate", bold_style),
-                        p("Price Var%", bold_style), p("Score", bold_style), p("Level", bold_style)]]
-            for vr in vendor_risk:
-                vr_rows.append([
-                    p(str(vr.get("vendor", vr.get("Vendor","")))[:40]),
-                    p(fmt_inr(vr.get("exposure", 0))),
-                    p(str(vr.get("avg_days_open", 0))),
-                    p(f"{vr.get('recon_rate',0):.1f}%"),
-                    p(f"{vr.get('avg_price_variance',0):.1f}%"),
-                    p(str(vr.get("score", 0))),
-                    p(vr.get("risk_level", "")),
-                ])
-            story.append(mk_tbl(vr_rows, [130, 65, 60, 60, 55, 40, 55]))
-        story.append(PageBreak())
-
-        # ╔════════════════════════════════════════════════════════════╗
-        # ║  PAGE 4 — Material & Plant Analytics                      ║
-        # ╚════════════════════════════════════════════════════════════╝
-        story.append(Paragraph("6. Material Exposure Analysis", h2_style))
-        if material_list:
-            m_rows = [[p("Material", bold_style), p("Items", bold_style),
-                       p("GR Value", bold_style), p("IR Value", bold_style),
-                       p("Open Value", bold_style)]]
-            for m in material_list:
-                m_rows.append([
-                    p(str(m.get("material", ""))[:50]),
-                    p(str(m.get("item_count", 0))),
-                    p(fmt_inr(m.get("gr_value", 0))),
-                    p(fmt_inr(m.get("ir_value", 0))),
-                    p(fmt_inr(m.get("open_value", 0))),
-                ])
-            story.append(mk_tbl(m_rows, [180, 40, 80, 80, 80]))
-        story.append(Spacer(1, 12))
-
-        # Plant performance
-        story.append(Paragraph("7. Plant Performance Summary", h2_style))
-        if plant_list:
-            pl_rows = [[p("Plant", bold_style), p("Items", bold_style),
-                        p("Open Value", bold_style), p("Recon Rate%", bold_style),
-                        p("Exception Rate%", bold_style), p("Critical", bold_style)]]
-            for pl in plant_list:
-                pl_rows.append([
-                    p(str(pl.get("plant", ""))),
-                    p(str(pl.get("item_count", 0))),
-                    p(fmt_inr(pl.get("open_value", 0))),
-                    p(f"{pl.get('reconciliation_rate',0):.1f}%"),
-                    p(f"{pl.get('exception_rate',0):.1f}%"),
-                    p(str(pl.get("critical_count", 0))),
-                ])
-            story.append(mk_tbl(pl_rows, [80, 45, 90, 80, 90, 60]))
-        story.append(PageBreak())
-
-        # ╔════════════════════════════════════════════════════════════╗
-        # ║  PAGE 5 — Top Exceptions & Risk Flags                     ║
-        # ╚════════════════════════════════════════════════════════════╝
-        story.append(Paragraph("8. Top Exceptions (Unreconciled Items)", h2_style))
-        if exceptions:
-            ex_rows = [[p("PO / Item", bold_style), p("Vendor", bold_style),
-                        p("Status", bold_style), p("Open Value", bold_style),
-                        p("Days Open", bold_style), p("Risk", bold_style)]]
-            for ex in exceptions:
-                ex_rows.append([
-                    p(f"{ex.get('po_number','')}/{ex.get('po_item','')}"),
-                    p(str(ex.get("vendor", ""))[:35]),
-                    p(ex.get("status", "")),
-                    p(fmt_inr(ex.get("open_val", 0))),
-                    p(str(ex.get("days_open", 0))),
-                    p(ex.get("risk_level", "")),
-                ])
-            story.append(mk_tbl(ex_rows, [80, 120, 100, 80, 60, 60]))
-        story.append(Spacer(1, 12))
-
-        # Rule-based risk flags
-        if risk_flags:
-            story.append(Paragraph("9. Rule-Based Risk Flags", h2_style))
-            rf_rows = [[p("PO / Vendor", bold_style), p("Risk Level", bold_style),
-                        p("Category", bold_style), p("Business Rule", bold_style), p("Action", bold_style)]]
-            for rf in risk_flags:
-                rf_rows.append([
-                    p(f"{rf.get('po','')} / {str(rf.get('vendor',''))[:25]}"),
-                    p(rf.get("risk_level", "")),
-                    p(rf.get("risk_category", "")),
-                    p(str(rf.get("business_rule_triggered", ""))[:60]),
-                    p(str(rf.get("recommended_action", ""))[:60]),
-                ])
-            story.append(mk_tbl(rf_rows, [90, 55, 70, 130, 115]))
-        story.append(PageBreak())
-
-        # ╔════════════════════════════════════════════════════════════╗
-        # ║  PAGE 6 — Insights, Price Variance & Action Plan          ║
-        # ╚════════════════════════════════════════════════════════════╝
-        # Deterministic insights
-        if det_insights:
-            story.append(Paragraph("10. Audit Findings & Deterministic Insights", h2_style))
-            for ins in det_insights:
-                story.append(Paragraph(f"{ins.get('title','')}", bold_style))
-                story.append(Paragraph(
-                    f"Source: {ins.get('source_dataset','')} | "
-                    f"Formula: {ins.get('formula_used','')} | "
-                    f"Threshold: {ins.get('threshold_used','')} | "
-                    f"Actual: {ins.get('actual_value','')}",
-                    bullet_style
-                ))
-                story.append(Paragraph(f"Impact: {ins.get('business_impact','')}", bullet_style))
-                story.append(Spacer(1, 4))
-            story.append(Spacer(1, 8))
-
-        # Price variance
-        if price_var:
-            story.append(Paragraph("11. Price Variance Analysis (Top 15)", h2_style))
-            pv_rows = [[p("PO / Item", bold_style), p("Vendor", bold_style),
-                        p("PO Price", bold_style), p("Variance %", bold_style),
-                        p("Variance Abs", bold_style), p("Risk", bold_style)]]
-            for pv in price_var:
-                pv_rows.append([
-                    p(f"{pv.get('po_number','')}/{pv.get('po_item','')}"),
-                    p(str(pv.get("vendor", ""))[:35]),
-                    p(fmt_inr(pv.get("po_price", 0))),
-                    p(f"{pv.get('variance_pct',0):.1f}%"),
-                    p(fmt_inr(pv.get("variance_abs", 0))),
-                    p(pv.get("risk_level", "")),
-                ])
-            story.append(mk_tbl(pv_rows, [80, 120, 70, 65, 80, 55]))
-        story.append(Spacer(1, 10))
-
-        # ── Recommended Actions ───────────────────────────────────────
-        story.append(Paragraph("12. Reconciliation Action Plan", h2_style))
-        for i, act in enumerate(actions, 1):
-            story.append(Paragraph(
-                f"<b>[{act.get('priority','?')}] {act.get('category','')}</b>",
-                bold_style
-            ))
-            story.append(Paragraph(act.get("action", ""), bullet_style))
-            story.append(Paragraph(
-                f"Owner: {act.get('owner','')} | Timeline: {act.get('timeline','')} | "
-                f"Impact: {act.get('impact','')}",
-                bullet_style
-            ))
-            story.append(Spacer(1, 6))
-
-        # Footer note
-        story.append(Spacer(1, 20))
-        story.append(HRFlowable(width="100%", thickness=0.5, color=MUTED, spaceAfter=6))
-        story.append(Paragraph(
-            f"Report generated automatically by Syrma SGS Procurement Analytics Platform on {generated_at}. "
-            "All figures are calculated deterministically from SAP source files (GRIR, EKKO, ME2N). "
-            "No hardcoded values or AI-generated estimates are included.",
-            sub_style
-        ))
-
-        doc.build(story)
-        pdf_buffer.seek(0)
+        pdf_buffer = grir_service.generate_pdf()
+        if not pdf_buffer:
+            return jsonify({"success": False, "error": "Failed to generate PDF."}), 500
         return send_file(
             pdf_buffer,
             mimetype="application/pdf",
@@ -1832,13 +954,21 @@ def grir_export_pdf():
         )
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": f"Failed to generate PDF: {str(e)}"}), 500
+        return jsonify({"success": False, "error": f"Failed to generate PDF: {str(e)}"}), 500
 
 
 # ─── Server Entry point ──────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import threading
+    import webbrowser
+
+    # Remove automatic disk loading to ensure clean state
+    # grir_service.load_from_disk()
+
+    # Open browser automatically
+    def open_browser():
+        webbrowser.open_new('http://127.0.0.1:5000')
+
     print("Syrma Procurement Analytics -- Backend starting on http://localhost:5000")
     app.run(debug=True, port=5000, host="0.0.0.0")
-
-

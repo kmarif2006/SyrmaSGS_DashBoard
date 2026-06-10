@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { 
   useGrirSummary, 
@@ -86,7 +86,7 @@ function GrirUploadZone({ onUploadSuccess }) {
   const inputRef = useRef()
 
   // Load existing metadata on mount
-  useState(() => {
+  useEffect(() => {
     fetchGrirUploadMetadata()
       .then(d => setMetadata(d))
       .catch(() => {})
@@ -1169,7 +1169,7 @@ export default function GrirDashboard() {
               <Layers size={18} className="text-indigo-400" />
               Ledger Investigation Center
             </h3>
-            <p className="text-xs text-slate-500 font-bold uppercase mt-0.5">Filter, search, and drill down on all {summary?.kpis ? safeLocaleString(summary.kpis.total_po_items, '47,803') : '47,803'} PO lines</p>
+            <p className="text-xs text-slate-500 font-bold uppercase mt-0.5">Filter, search, and drill down on all {summary?.kpis ? safeLocaleString(summary.kpis.total_po_items) : '0'} PO lines</p>
           </div>
           
           <button 
@@ -1497,18 +1497,19 @@ export default function GrirDashboard() {
 
   if (summaryError) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
-        <AlertTriangle size={64} className="text-red-500 mb-4 animate-bounce" />
-        <h1 className="text-2xl font-black text-white mb-2">GR/IR Data Error</h1>
-        <p className="text-slate-400 max-w-md mb-6">
-          Unable to load the GR/IR Reconciliation Analysis results. Please make sure that the Python script has run successfully.
-        </p>
-        <button 
-          onClick={() => window.location.reload()} 
-          className="btn-primary"
-        >
-          Retry Loading
-        </button>
+      <div className="min-h-screen bg-slate-950 pb-16">
+        <NavBar />
+        <main id="dashboard-container" className="max-w-[1600px] mx-auto px-5 pt-8 space-y-8">
+          <GrirUploadZone onUploadSuccess={handleUploadSuccess} />
+          
+          <div className="bg-slate-900/50 border border-red-500/20 rounded-2xl p-10 flex flex-col items-center justify-center text-center">
+            <AlertTriangle size={64} className="text-red-500 mb-4 animate-bounce" />
+            <h1 className="text-2xl font-black text-white mb-2">Analysis Pending</h1>
+            <p className="text-slate-400 max-w-md mb-6">
+              {summaryError?.response?.data?.error || summaryError?.message || 'Unable to load the GR/IR Reconciliation Analysis results. Please upload your GR/IR file above to begin.'}
+            </p>
+          </div>
+        </main>
       </div>
     )
   }
