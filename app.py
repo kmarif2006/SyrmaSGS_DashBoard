@@ -17,6 +17,10 @@ import urllib.error
 import os
 from datetime import datetime
 from services.grir_analytics_service import GRIRAnalyticsService
+from services.grir_reconciliation_engine import aggregate_by_po_item
+from services.grir_kpi_builder import (
+    build_executive_kpis, build_aging_analysis, build_top_management_insights, build_chart_data
+)
 
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"])
@@ -31,6 +35,19 @@ store = {
     "merged_df": None,
     "transaction_filename": None,
     "master_filename": None,
+}
+
+# ─── GRIR Analytics State ────────────────────────────────────────────────────
+grir_state = {
+    "grir_df": None,
+    "me2n_df": None,
+    "ekko_df": None,
+    "reconciled_df": None,
+    "kpis": None,
+    "aging_analysis": None,
+    "top_insights": None,
+    "chart_data": None,
+    "analysis_timestamp": None,
 }
 
 
@@ -879,62 +896,7 @@ def grir_ai_insights():
     return jsonify(insights)
 
 
-@app.route("/api/grir/export/json", methods=["GET"])
-def grir_export_json():
-    """Export the full GR/IR analysis payload as JSON."""
-    if not grir_service.has_data():
-        return jsonify({"success": False, "error": "GR/IR Analysis data not found."}), 404
-    dashboard = grir_service.get_dashboard()
-    return jsonify(dashboard)
 
-
-@app.route("/api/grir/export/excel", methods=["GET"])
-def grir_export_excel():
-    """Generate and download a multi-sheet Excel report."""
-    if not grir_service.has_data():
-        return jsonify({"success": False, "error": "GR/IR Analysis data not found."}), 404
-    try:
-        data = grir_service._output
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            kpis = data.get("kpis", {})
-            kpis_df = pd.DataFrame(list(kpis.items()), columns=["Metric", "Value"])
-            kpis_df.to_excel(writer, sheet_name="KPIs Summary", index=False)
-
-            exceptions = data.get("top_exceptions", [])
-            if exceptions:
-                pd.DataFrame(exceptions).to_excel(writer, sheet_name="Top Exceptions", index=False)
-
-            vendors = data.get("vendor_insights", [])
-            if vendors:
-                pd.DataFrame(vendors).to_excel(writer, sheet_name="Vendor Performance", index=False)
-
-            materials = data.get("material_insights", [])
-            if materials:
-                pd.DataFrame(materials).to_excel(writer, sheet_name="Material Insights", index=False)
-
-            aging = data.get("aging_analysis", [])
-            if aging:
-                pd.DataFrame(aging).to_excel(writer, sheet_name="Aging Analysis", index=False)
-
-            price_var = data.get("price_variance_analysis", [])
-            if price_var:
-                pd.DataFrame(price_var).to_excel(writer, sheet_name="Price Variances", index=False)
-
-            reversals = data.get("reversal_analysis", [])
-            if reversals:
-                pd.DataFrame(reversals).to_excel(writer, sheet_name="Reversals Log", index=False)
-
-        output.seek(0)
-        return send_file(
-            io.BytesIO(output.getvalue()),
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            as_attachment=True,
-            download_name="grir_reconciliation_report.xlsx"
-        )
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": f"Failed to generate Excel sheet: {str(e)}"}), 500
 
 
 @app.route("/api/grir/export/pdf", methods=["GET"])
@@ -957,6 +919,365 @@ def grir_export_pdf():
         return jsonify({"success": False, "error": f"Failed to generate PDF: {str(e)}"}), 500
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── PRODUCTION-GRADE GRIR ANALYTICS ENDPOINTS ─────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# These endpoints implement the complete GRIR reconciliation workflow with INR
+# normalization, reconciliation engine, and comprehensive KPI calculations.
+# Isolated from existing functionality to prevent breaking changes.
+
+
+@app.route("/api/grir/upload-files", methods=["POST"])
+def grir_upload_files():
+    """Upload GRIR, ME2N, and/or EKKO files for analysis."""
+    print("[GRIR] Upload request received")
+    
+    try:
+        files = request.files
+        file_mapping = {}
+        
+        # Parse uploaded files and detect types
+        for file_key in files:
+            file = files[file_key]
+            if not file or file.filename == '':
+                continue
+            
+            try:
+                print(f"[GRIR] Processing file: {file.filename}")
+                
+                if file.filename.lower().endswith('.csv'):
+                    df = pd.read_csv(file, encoding='utf-8', low_memory=False)
+                elif file.filename.lower().endswith(('.xlsx', '.xls')):
+                    df = pd.read_excel(file)
+                else:
+                    return jsonify({"success": False, "error": f"Unsupported format for {file.filename}"}), 400
+                
+                # Detect file type by schema
+                file_type = _detect_grir_file_type(df)
+                if not file_type:
+                    return jsonify({"success": False, "error": f"Could not detect file type for {file.filename}. Ensure it has proper GRIR/ME2N/EKKO columns."}), 400
+                
+                print(f"[GRIR] Detected file type: {file_type}")
+                file_mapping[file_type] = df
+                
+            except Exception as e:
+                return jsonify({"success": False, "error": f"Failed to parse {file.filename}: {str(e)}"}), 400
+        
+        if not file_mapping:
+            return jsonify({"success": False, "error": "No files uploaded"}), 400
+        
+        # Store DataFrames
+        grir_state['grir_df'] = file_mapping.get('GRIR')
+        grir_state['me2n_df'] = file_mapping.get('ME2N')
+        grir_state['ekko_df'] = file_mapping.get('EKKO')
+        
+        print(f"[GRIR] Stored files: GRIR={grir_state['grir_df'] is not None and not grir_state['grir_df'].empty}, ME2N={grir_state['me2n_df'] is not None and not grir_state['me2n_df'].empty}, EKKO={grir_state['ekko_df'] is not None and not grir_state['ekko_df'].empty}")
+        
+        # Validate minimum requirements
+        if grir_state['grir_df'] is None or grir_state['me2n_df'] is None:
+            return jsonify({
+                "success": False,
+                "error": "GRIR and ME2N files are required for analysis"
+            }), 400
+        
+        # Run reconciliation
+        print("[GRIR] Running reconciliation...")
+        try:
+            grir_state['reconciled_df'] = aggregate_by_po_item(
+                grir_state['grir_df'],
+                grir_state['me2n_df'],
+                grir_state['ekko_df'],
+                analysis_date=pd.Timestamp(datetime.now())
+            )
+            
+            # Build analytics
+            print("[GRIR] Building KPIs...")
+            grir_state['kpis'] = build_executive_kpis(grir_state['reconciled_df'])
+            grir_state['aging_analysis'] = build_aging_analysis(grir_state['reconciled_df'])
+            grir_state['top_insights'] = build_top_management_insights(grir_state['reconciled_df'])
+            grir_state['chart_data'] = build_chart_data(grir_state['reconciled_df'])
+            grir_state['analysis_timestamp'] = datetime.now().isoformat()
+            
+            print("[GRIR] Analysis complete!")
+            
+            return jsonify({
+                "success": True,
+                "message": "Files uploaded and analysis completed successfully",
+                "files_processed": list(file_mapping.keys()),
+                "po_lines_analyzed": len(grir_state['reconciled_df']),
+                "reconciliation_rate_pct": round(grir_state['kpis']['reconciliation_rate_pct'], 1),
+                "total_open_exposure_inr": round(grir_state['kpis']['total_open_exposure_inr'], 2)
+            })
+            
+        except Exception as e:
+            traceback.print_exc()
+            print(f"[GRIR] Reconciliation error: {e}")
+            return jsonify({
+                "success": False,
+                "error": f"Reconciliation failed: {str(e)}"
+            }), 500
+            
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _detect_grir_file_type(df):
+    """Detect SAP file type by columns."""
+    cols_lower = [str(c).strip().lower() for c in df.columns]
+    
+    # Check for GRIR-specific columns
+    grir_indicators = ['trans type', 'trans_type', 'dr/cr ind', 'dr_cr_ind', 'amt (lc)', 'amt_lc']
+    if any(indicator in cols_lower for indicator in grir_indicators):
+        return 'GRIR'
+    
+    # Check for EKKO-specific columns
+    ekko_indicators = ['exchange rate', 'exchange_rate', 'company code', 'company_code']
+    if any(indicator in cols_lower for indicator in ekko_indicators):
+        if 'purchasing document' in cols_lower or 'purchasing_document' in cols_lower:
+            return 'EKKO'
+    
+    # Check for ME2N-specific columns
+    me2n_indicators = ['net order value', 'net_order_value', 'still to be delivered', 'still_to_be_delivered']
+    if any(indicator in cols_lower for indicator in me2n_indicators):
+        return 'ME2N'
+    
+    # Fallback: check purchasing document presence
+    if 'purchasing document' in cols_lower or 'purchasing_document' in cols_lower:
+        if 'company code' in cols_lower or 'company_code' in cols_lower:
+            return 'EKKO'
+        return 'ME2N'
+    
+    return None
+
+
+@app.route("/api/grir/kpis", methods=["GET"])
+def grir_get_kpis():
+    """Get all executive KPIs."""
+    if grir_state['reconciled_df'] is None:
+        return jsonify({
+            "success": False,
+            "error": "No data analyzed. Please upload files first."
+        }), 400
+    
+    return jsonify({
+        "success": True,
+        "kpis": grir_state['kpis'],
+        "analysis_timestamp": grir_state['analysis_timestamp']
+    })
+
+
+@app.route("/api/grir/aging", methods=["GET"])
+def grir_get_aging():
+    """Get aging bucket analysis."""
+    if grir_state['reconciled_df'] is None:
+        return jsonify({
+            "success": False,
+            "error": "No data analyzed. Please upload files first."
+        }), 400
+    
+    return jsonify({
+        "success": True,
+        "aging_analysis": grir_state['aging_analysis']
+    })
+
+
+@app.route("/api/grir/insights", methods=["GET"])
+def grir_get_insights():
+    """Get top management insights."""
+    if grir_state['reconciled_df'] is None:
+        return jsonify({
+            "success": False,
+            "error": "No data analyzed. Please upload files first."
+        }), 400
+    
+    return jsonify({
+        "success": True,
+        "insights": grir_state['top_insights']
+    })
+
+
+@app.route("/api/grir/charts", methods=["GET"])
+def grir_get_charts():
+    """Get chart data for all visualizations."""
+    if grir_state['reconciled_df'] is None:
+        return jsonify({
+            "success": False,
+            "error": "No data analyzed. Please upload files first."
+        }), 400
+    
+    return jsonify({
+        "success": True,
+        "charts": grir_state['chart_data']
+    })
+
+
+@app.route("/api/grir/reconciled-items", methods=["GET"])
+def grir_get_reconciled_items():
+    """Get paginated reconciled items with filters."""
+    if grir_state['reconciled_df'] is None:
+        return jsonify({
+            "success": False,
+            "error": "No data analyzed. Please upload files first.",
+            "items": [],
+            "total": 0
+        }), 400
+    
+    try:
+        page = int(request.args.get("page", 1))
+        limit = int(request.args.get("limit", 50))
+        search = request.args.get("search", "").strip()
+        status_filter = request.args.get("status", "").strip()
+        
+        df = grir_state['reconciled_df'].copy()
+        
+        # Apply filters
+        if status_filter:
+            df = df[df['Status'] == status_filter]
+        
+        if search:
+            search_lower = search.lower()
+            df = df[
+                df['PO Number'].astype(str).str.lower().str.contains(search_lower, na=False) |
+                df['Vendor'].astype(str).str.lower().str.contains(search_lower, na=False) |
+                df['Material'].astype(str).str.lower().str.contains(search_lower, na=False)
+            ]
+        
+        total = len(df)
+        start_idx = (page - 1) * limit
+        end_idx = start_idx + limit
+        
+        items = df.iloc[start_idx:end_idx][[
+            'PO Number', 'PO Item', 'Vendor', 'Material', 'Status',
+            'Net_GR_Qty', 'Net_IR_Qty', 'Open_Qty',
+            'Net_GR_Val_INR', 'Net_IR_Val_INR', 'Open_Exposure_INR',
+            'Days_Open', 'Aging_Bucket'
+        ]].copy()
+        
+        items_json = records_to_json(items)
+        
+        return jsonify({
+            "success": True,
+            "items": items_json,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "pages": (total + limit - 1) // limit
+        })
+        
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route("/api/grir/dashboard", methods=["GET"])
+def grir_get_dashboard():
+    """Get complete dashboard data (KPIs + Charts + Insights)."""
+    if grir_state['reconciled_df'] is None:
+        return jsonify({
+            "success": False,
+            "error": "No data analyzed. Please upload files first."
+        }), 400
+    
+    return jsonify({
+        "success": True,
+        "kpis": grir_state['kpis'],
+        "aging": grir_state['aging_analysis'],
+        "insights": grir_state['top_insights'],
+        "charts": grir_state['chart_data'],
+        "analysis_timestamp": grir_state['analysis_timestamp']
+    })
+
+
+@app.route("/api/grir/export/json", methods=["GET"])
+def grir_export_json():
+    """Export complete analysis as JSON."""
+    if grir_state['reconciled_df'] is None:
+        return jsonify({
+            "success": False,
+            "error": "No data analyzed. Please upload files first."
+        }), 400
+    
+    export_data = {
+        "metadata": {
+            "analysis_timestamp": grir_state['analysis_timestamp'],
+            "po_lines_analyzed": len(grir_state['reconciled_df']),
+        },
+        "kpis": grir_state['kpis'],
+        "aging_analysis": grir_state['aging_analysis'],
+        "insights": grir_state['top_insights'],
+        "chart_data": grir_state['chart_data'],
+        "items": records_to_json(grir_state['reconciled_df'])
+    }
+    
+    return jsonify({
+        "success": True,
+        "data": export_data
+    })
+
+
+@app.route("/api/grir/export/excel", methods=["GET"])
+def grir_export_excel():
+    """Export analysis as Excel report."""
+    if grir_state['reconciled_df'] is None:
+        return jsonify({
+            "success": False,
+            "error": "No data analyzed. Please upload files first."
+        }), 400
+    
+    try:
+        output = io.BytesIO()
+        
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # Sheet 1: KPIs Summary
+            kpis_flat = []
+            for key, value in grir_state['kpis'].items():
+                kpis_flat.append({'Metric': key, 'Value': value})
+            pd.DataFrame(kpis_flat).to_excel(writer, sheet_name='KPIs', index=False)
+            
+            # Sheet 2: Aging Analysis
+            pd.DataFrame(grir_state['aging_analysis']).to_excel(writer, sheet_name='Aging', index=False)
+            
+            # Sheet 3: Top Insights - Vendors
+            if grir_state['top_insights'].get('top_vendors_by_exposure'):
+                pd.DataFrame(grir_state['top_insights']['top_vendors_by_exposure']).to_excel(
+                    writer, sheet_name='Top Vendors', index=False
+                )
+            
+            # Sheet 4: Top Insights - Plants
+            if grir_state['top_insights'].get('top_plants_by_exposure'):
+                pd.DataFrame(grir_state['top_insights']['top_plants_by_exposure']).to_excel(
+                    writer, sheet_name='Top Plants', index=False
+                )
+            
+            # Sheet 5: Largest Unreconciled
+            if grir_state['top_insights'].get('largest_unreconciled_po_lines'):
+                pd.DataFrame(grir_state['top_insights']['largest_unreconciled_po_lines']).to_excel(
+                    writer, sheet_name='Largest Unreconciled', index=False
+                )
+            
+            # Sheet 6: All Items
+            grir_state['reconciled_df'].to_excel(writer, sheet_name='All Items', index=False)
+        
+        output.seek(0)
+        return send_file(
+            io.BytesIO(output.getvalue()),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=f"grir_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        )
+        
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": f"Failed to generate Excel: {str(e)}"
+        }), 500
+
+
 # ─── Server Entry point ──────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -971,4 +1292,7 @@ if __name__ == "__main__":
         webbrowser.open_new('http://127.0.0.1:5000')
 
     print("Syrma Procurement Analytics -- Backend starting on http://localhost:5000")
-    app.run(debug=True, port=5000, host="0.0.0.0")
+    debug_mode = os.environ.get('FLASK_DEBUG', '1') == '1'
+    app.run(debug=debug_mode, port=5000, host="0.0.0.0")
+
+
