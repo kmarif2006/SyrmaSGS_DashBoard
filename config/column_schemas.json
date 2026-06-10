@@ -1,0 +1,14 @@
+{
+  "GRIR": {
+    "required": ["PO Number", "PO Item", "Trans Type", "Dr/Cr Ind", "Quantity", "Amt (LC)", "Posting Date"],
+    "optional": ["Amt (FC)", "Document Date", "Plant", "Doc Type", "Document No", "Doc Item", "Reference Doc"]
+  },
+  "EKKO": {
+    "required": ["Purchasing Document", "Currency", "Exchange Rate", "Company Code", "Purchasing Doc. Type"],
+    "optional": ["Deletion indicator"]
+  },
+  "ME2N": {
+    "required": ["Purchasing Document", "Item", "Order Quantity", "Net Price", "Net Order Value", "Open value", "Plant"],
+    "optional": ["Short Text", "Material", "Material Group", "Purchasing Group", "Name of Supplier", "Supplier/Supplying Plant", "Still to be delivered (qty)", "Still to be invoiced (qty)", "Still to be invoiced (val.)", "Delivery date"]
+  }
+}
