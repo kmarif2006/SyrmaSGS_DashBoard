@@ -1,16 +1,16 @@
 """
 SAP GR/IR KPI Builder
-Comprehensive KPI calculations for executive dashboard.
+Comprehensive KPI calculations for executive dashboard based on ledger postings.
 """
 
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 def build_executive_kpis(reconciled_df):
     """
-    Build 10 executive KPIs from reconciled data.
+    Build executive KPIs from reconciled data.
     
     Args:
         reconciled_df: Reconciled DataFrame from reconciliation engine
@@ -19,72 +19,94 @@ def build_executive_kpis(reconciled_df):
         Dictionary of KPI values
     """
     kpis = {}
+    tolerance = 0.01
     
     # 1. Total PO Lines
     kpis['total_po_lines'] = len(reconciled_df)
     
     # 2. Reconciled PO Lines (No open exposure)
-    reconciled_mask = reconciled_df['Open_Exposure_INR'].abs() <= 0.01
+    reconciled_mask = reconciled_df['Open_Exposure_INR'].abs() <= tolerance
     kpis['reconciled_po_lines'] = reconciled_mask.sum()
     
-    # 3. Reconciliation Rate %
+    # 3. Unreconciled PO Lines
+    kpis['unreconciled_po_lines'] = len(reconciled_df) - kpis['reconciled_po_lines']
+    
+    # 4. Reconciliation Rate %
     if len(reconciled_df) > 0:
         kpis['reconciliation_rate_pct'] = (kpis['reconciled_po_lines'] / len(reconciled_df)) * 100
     else:
         kpis['reconciliation_rate_pct'] = 0.0
-    
-    # 4. Total Open Exposure INR
-    kpis['total_open_exposure_inr'] = reconciled_df['Open_Exposure_INR'].sum()
-    
+        
     # 5. Total GR Value INR
     kpis['total_gr_value_inr'] = reconciled_df['Net_GR_Val_INR'].sum()
     
     # 6. Total IR Value INR
     kpis['total_ir_value_inr'] = reconciled_df['Net_IR_Val_INR'].sum()
     
-    # 7. Pending Invoice Count (IR Pending items)
+    # 7. Signed Open Balance INR
+    kpis['signed_open_balance_inr'] = reconciled_df['Open_Val_INR'].sum()
+    
+    # 8. Total Open Exposure INR
+    kpis['total_open_exposure_inr'] = reconciled_df['Open_Exposure_INR'].sum()
+    
+    # 9. IR Pending Count and Value
     kpis['pending_invoice_count'] = (reconciled_df['Status'] == 'IR Pending').sum()
     kpis['pending_invoice_value_inr'] = reconciled_df[reconciled_df['Status'] == 'IR Pending']['Open_Exposure_INR'].sum()
     
-    # 8. Pending GR Count (GR Pending items)
+    # 10. GR Pending Count and Value
     kpis['pending_gr_count'] = (reconciled_df['Status'] == 'GR Pending').sum()
     kpis['pending_gr_value_inr'] = reconciled_df[reconciled_df['Status'] == 'GR Pending']['Open_Exposure_INR'].sum()
     
-    # 9. Average Invoice Delay (days to invoice first GR item)
+    # 11. Open PO Count
+    kpis['open_po_count'] = reconciled_df[reconciled_df['Open_Exposure_INR'] > tolerance]['PO Number'].nunique()
+    
+    # 12. Active Vendors
+    kpis['active_vendors'] = reconciled_df[reconciled_df['Open_Exposure_INR'] > tolerance]['Vendor'].nunique()
+    
+    # 13. Reversal Count and Value
+    kpis['reversal_count'] = int(reconciled_df['Reversal_Count_PO'].sum()) if 'Reversal_Count_PO' in reconciled_df.columns else 0
+    kpis['reversal_value_inr'] = reconciled_df['Reversal_Value_INR_PO'].sum() if 'Reversal_Value_INR_PO' in reconciled_df.columns else 0.0
+    
+    # 14. Currency Conversion Issues
+    kpis['currency_conversion_issues'] = int(reconciled_df['Currency_Conversion_Missing_Count'].sum()) if 'Currency_Conversion_Missing_Count' in reconciled_df.columns else 0
+
+    # 15. Average Invoice Delay (days to invoice first GR item)
     ir_pending = reconciled_df[reconciled_df['Status'] == 'IR Pending']
-    if len(ir_pending) > 0:
+    if len(ir_pending) > 0 and 'Days_Open' in ir_pending.columns:
         kpis['average_invoice_delay_days'] = ir_pending['Days_Open'].mean()
     else:
         kpis['average_invoice_delay_days'] = 0.0
     
-    # 10. Average Reconciliation Time (days to reconcile)
-    if kpis['reconciled_po_lines'] > 0:
+    # 16. Average Reconciliation Time (days to reconcile)
+    if kpis['reconciled_po_lines'] > 0 and 'Days_Open' in reconciled_df.columns:
         reconciled_items = reconciled_df[reconciled_mask]
         kpis['average_reconciliation_time_days'] = reconciled_items['Days_Open'].mean()
     else:
         kpis['average_reconciliation_time_days'] = 0.0
-    
-    # Additional KPIs for dashboard context
-    kpis['unreconciled_po_lines'] = len(reconciled_df) - kpis['reconciled_po_lines']
-    kpis['total_procurement_spend_inr'] = reconciled_df['Net_Order_Value_INR'].sum()
-    kpis['total_goods_received_value_inr'] = reconciled_df['Net_GR_Val_INR'].sum()
-    kpis['total_invoiced_value_inr'] = reconciled_df['Net_IR_Val_INR'].sum()
-    
-    # Unique counts - handle missing columns
-    kpis['unique_vendors'] = reconciled_df['Vendor'].nunique() if 'Vendor' in reconciled_df.columns else 0
+
+    # Compatibility keys for older/different consumer logic
+    kpis['reconciliation_rate'] = kpis['reconciliation_rate_pct']
+    kpis['reconciled_count'] = kpis['reconciled_po_lines']
+    kpis['total_po_items'] = kpis['total_po_lines']
+    kpis['total_open_value'] = kpis['total_open_exposure_inr']
+    kpis['total_gr_value'] = kpis['total_gr_value_inr']
+    kpis['total_ir_value'] = kpis['total_ir_value_inr']
+    kpis['critical_items'] = int((reconciled_df['risk_level'] == 'CRITICAL').sum()) if 'risk_level' in reconciled_df.columns else 0
+    kpis['unique_pos'] = kpis['open_po_count']
+    kpis['unique_vendors'] = kpis['active_vendors']
+    kpis['total_reversals_val'] = kpis['reversal_value_inr']
     kpis['unique_plants'] = reconciled_df['Plant'].nunique() if 'Plant' in reconciled_df.columns else 0
-    kpis['unique_materials'] = reconciled_df['Material'].nunique() if 'Material' in reconciled_df.columns else 0
-    kpis['unique_po_numbers'] = reconciled_df['PO Number'].nunique() if 'PO Number' in reconciled_df.columns else 0
+    kpis['total_materials'] = reconciled_df['Material'].nunique() if 'Material' in reconciled_df.columns else 0
     
     # Status distribution
     status_counts = reconciled_df['Status'].value_counts().to_dict()
-    kpis['status_distribution'] = status_counts
+    kpis['status_distribution'] = {k: int(v) for k, v in status_counts.items()}
     
     # Aging distribution
     aging_counts = reconciled_df['Aging_Bucket'].value_counts().to_dict()
-    kpis['aging_distribution'] = aging_counts
+    kpis['aging_distribution'] = {k: int(v) for k, v in aging_counts.items()}
     
-    # Round all float values to 2 decimals
+    # Round all float values
     for key, val in kpis.items():
         if isinstance(val, float):
             kpis[key] = round(val, 2)
@@ -111,6 +133,11 @@ def build_aging_analysis(reconciled_df):
     
     for bucket in buckets:
         bucket_data = reconciled_df[reconciled_df['Aging_Bucket'] == bucket]
+        if len(bucket_data) == 0:
+            # Try legacy bucket mapping without ' Days' suffix
+            legacy_bucket = bucket.replace(' Days', '')
+            bucket_data = reconciled_df[reconciled_df['Aging_Bucket'] == legacy_bucket]
+            
         if len(bucket_data) == 0:
             continue
         
@@ -143,7 +170,7 @@ def build_top_management_insights(reconciled_df):
     """
     insights = {}
     
-    # Top Vendors by Open Exposure - handle missing column
+    # Top Vendors by Open Exposure
     insights['top_vendors_by_exposure'] = []
     if 'Vendor' in reconciled_df.columns and 'Open_Exposure_INR' in reconciled_df.columns:
         try:
@@ -161,7 +188,7 @@ def build_top_management_insights(reconciled_df):
     if 'Plant' in reconciled_df.columns and 'Open_Exposure_INR' in reconciled_df.columns:
         try:
             top_plants = (reconciled_df.groupby('Plant')['Open_Exposure_INR'].sum()
-                          .sort_values(ascending=False).head(10))
+                           .sort_values(ascending=False).head(10))
             insights['top_plants_by_exposure'] = [
                 {'plant': plant, 'exposure_inr': round(float(value), 2)}
                 for plant, value in top_plants.items()
@@ -236,7 +263,7 @@ def build_top_management_insights(reconciled_df):
     # Status summary
     status_summary = {}
     if 'Status' in reconciled_df.columns:
-        for status in ['IR Pending', 'GR Pending', 'GR Done', 'No Activity']:
+        for status in ['IR Pending', 'GR Pending', 'Reconciled', 'No Activity']:
             status_data = reconciled_df[reconciled_df['Status'] == status]
             status_summary[status] = {
                 'count': len(status_data),

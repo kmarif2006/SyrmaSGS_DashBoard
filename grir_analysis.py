@@ -263,14 +263,23 @@ def clean_ekko(ekko, strict=True):
 # AGING BUCKETS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def aging_bucket(days):
-    if pd.isna(days) or days is None:
-        return '180+'
+def aging_bucket(val):
+    if pd.isna(val) or val is None:
+        return '365+'
+    if isinstance(val, (int, float, np.integer, np.floating)):
+        days = int(val)
+    else:
+        # assume it is a Timestamp / datetime
+        posting_date = pd.to_datetime(val)
+        days = (ANALYSIS_DATE - posting_date).days
+    
     if days <= 30:   return '0-30'
     if days <= 60:   return '31-60'
     if days <= 90:   return '61-90'
     if days <= 180:  return '91-180'
-    return '180+'
+    if days <= 365:  return '181-365'
+    return '365+'
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -278,44 +287,66 @@ def aging_bucket(days):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def classify_status(row):
-    gr_qty   = row['net_gr_qty']
-    ir_qty   = row['net_ir_qty']
-    open_qty = row['open_qty']
-    open_val = row['open_val']
-    rev_pct  = row['reversal_pct']
+    gr_qty   = row.get('net_gr_qty', 0)
+    ir_qty   = row.get('net_ir_qty', 0)
+    gr_val   = row.get('net_gr_val', 0)
+    ir_val   = row.get('net_ir_val', 0)
+    open_val = row.get('open_val', 0)
+    open_qty = row.get('open_qty', 0)
+    rev_pct  = row.get('reversal_pct', 0)
     tol = 0.01
 
-    if rev_pct >= 99 or (abs(gr_qty) < tol and abs(ir_qty) < tol):
-        return 'FULLY REVERSED'
+    if (abs(gr_qty) < tol and abs(ir_qty) < tol) or (abs(gr_val) < tol and abs(ir_val) < tol) or rev_pct >= 99:
+        return 'No Activity'
 
-    if abs(gr_qty) < tol and ir_qty > tol:
-        return 'IR ONLY'
+    if abs(open_val) <= tol:
+        return 'Reconciled'
 
-    if gr_qty > tol and abs(ir_qty) < tol:
-        if rev_pct > 0:
-            return 'PARTIALLY REVERSED'
-        return 'GR ONLY'
+    if open_val > tol:
+        return 'IR Pending'
 
-    if abs(open_qty) < tol and abs(open_val) < 1.0:
-        return 'FULLY RECONCILED'
+    if open_val < -tol:
+        return 'GR Pending'
 
-    if abs(open_qty) < tol and abs(open_val) >= 1.0:
-        return 'PRICE VARIANCE'
+    return 'No Activity'
 
-    if open_qty < -tol:
-        return 'OVER INVOICED'
-
-    if open_qty > tol:
-        if ir_qty > tol:
-            return 'PARTIALLY INVOICED'
-        return 'GR ONLY'
-
-    return 'PARTIALLY INVOICED'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RULE-BASED RISK SCORING (No opaque AI scoring)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def compute_risk(status, open_val, bucket, rev_pct, pv_pct):
+    score = 0
+    status_map = {
+        'FULLY RECONCILED': 0, 'FULLY REVERSED': 0, 'CLOSED': 0,
+        'PARTIALLY REVERSED': 15, 'PARTIALLY INVOICED': 25,
+        'GR ONLY': 40, 'IR ONLY': 55, 'PRICE VARIANCE': 35,
+        'OVER INVOICED': 65, 'CRITICAL EXCEPTION': 85,
+    }
+    score += status_map.get(status, 20)
+
+    av = abs(open_val)
+    if av > 5000000:   score += 30
+    elif av > 1000000: score += 20
+    elif av > 500000:  score += 12
+    elif av > 100000:  score += 6
+
+    age_map = {'0-30': 0, '31-60': 5, '61-90': 12, '91-180': 20, '181-365': 30, '365+': 40}
+    score += age_map.get(bucket, 0)
+
+    if abs(pv_pct) > 20: score += 15
+    elif abs(pv_pct) > 10: score += 8
+
+    if rev_pct > 50: score += 10
+
+    score = min(score, 100)
+    if score >= 70: level = 'CRITICAL'
+    elif score >= 50: level = 'HIGH'
+    elif score >= 30: level = 'MEDIUM'
+    else: level = 'LOW'
+    return score, level
+
 
 def compute_row_risk(row, reconciled):
     if reconciled or row['status'] in ('FULLY RECONCILED', 'FULLY REVERSED'):
@@ -393,151 +424,273 @@ def explain(row):
 # RECONCILIATION ENGINE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def reconcile(grir, me2n, ekko):
+def reconcile(grir, me2n, ekko, analysis_date=None):
     print("  Building GRIR aggregates by PO+Item ...")
+    if analysis_date is None:
+        analysis_date = pd.Timestamp(ANALYSIS_DATE)
+    else:
+        analysis_date = pd.Timestamp(analysis_date)
+    grir_df = grir.copy()
+    me2n_df = me2n.copy()
+    ekko_df = ekko.copy()
     
-    gr_agg = grir[grir['Trans Type'] == '1'].groupby(['PO Number','PO Item']).agg(
-        gr_qty_s   = ('Signed Qty', lambda x: x[grir.loc[x.index,'Dr/Cr Ind']=='S'].sum()),
-        gr_qty_h   = ('Quantity',   lambda x: x[grir.loc[x.index,'Dr/Cr Ind']=='H'].sum()),
-        gr_val_s   = ('Signed Amt', lambda x: x[grir.loc[x.index,'Dr/Cr Ind']=='S'].sum()),
-        gr_val_h   = ('Amt (LC)',   lambda x: x[grir.loc[x.index,'Dr/Cr Ind']=='H'].sum()),
-        gr_txn_count = ('Quantity', 'count'),
-        earliest_gr  = ('Posting Date', 'min'),
-        latest_gr    = ('Posting Date', 'max'),
+    # Standardize keys: convert to string and strip spaces
+    grir_df['PO Number'] = grir_df['PO Number'].astype(str).str.strip()
+    grir_df['PO Item'] = pd.to_numeric(grir_df['PO Item'], errors='coerce').fillna(0).astype(int).astype(str)
+    
+    if 'Purchasing Document' in me2n_df.columns:
+        me2n_df = me2n_df.rename(columns={'Purchasing Document': 'PO Number'})
+    if 'Item' in me2n_df.columns:
+        me2n_df = me2n_df.rename(columns={'Item': 'PO Item'})
+        
+    me2n_df['PO Number'] = me2n_df['PO Number'].astype(str).str.strip()
+    me2n_df['PO Item'] = pd.to_numeric(me2n_df['PO Item'], errors='coerce').fillna(0).astype(int).astype(str)
+    
+    if 'Purchasing Document' in ekko_df.columns:
+        ekko_df = ekko_df.rename(columns={'Purchasing Document': 'PO Number'})
+    ekko_df['PO Number'] = ekko_df['PO Number'].astype(str).str.strip()
+    
+    # Left join EKKO to GRIR
+    ekko_cols = ['PO Number', 'Currency', 'Exchange Rate']
+    if 'Company Code' in ekko_df.columns:
+        ekko_cols.append('Company Code')
+    ekko_sub = ekko_df[ekko_cols].rename(columns={
+        'Currency': 'EKKO_Currency',
+        'Exchange Rate': 'EKKO_Exchange_Rate',
+        'Company Code': 'EKKO_Company_Code'
+    }).drop_duplicates(subset=['PO Number'])
+    
+    grir_df = grir_df.merge(ekko_sub, on='PO Number', how='left')
+    
+    # Normalize amount to INR
+    Amt_LC = pd.to_numeric(grir_df['Amt (LC)'], errors='coerce').fillna(0.0)
+    Amt_FC = pd.to_numeric(grir_df['Amt (FC)'], errors='coerce').fillna(0.0)
+    GRIR_Exchange_Rate = pd.to_numeric(grir_df['Exchange Rate'], errors='coerce').fillna(0.0) if 'Exchange Rate' in grir_df.columns else pd.Series(0.0, index=grir_df.index)
+    EKKO_Exchange_Rate = pd.to_numeric(grir_df['EKKO_Exchange_Rate'], errors='coerce').fillna(0.0) if 'EKKO_Exchange_Rate' in grir_df.columns else pd.Series(0.0, index=grir_df.index)
+    
+    conds = [
+        (Amt_LC != 0),
+        (Amt_FC != 0) & (GRIR_Exchange_Rate > 0),
+        (Amt_FC != 0) & (EKKO_Exchange_Rate > 0)
+    ]
+    choices = [
+        Amt_LC,
+        Amt_FC * GRIR_Exchange_Rate,
+        Amt_FC * EKKO_Exchange_Rate
+    ]
+    grir_df['Normalized_Amount_INR'] = np.select(conds, choices, default=0.0)
+    grir_df['Currency_Conversion_Missing'] = (~(conds[0] | conds[1] | conds[2])) & ((Amt_FC != 0) | (Amt_LC != 0))
+    
+    # Apply S/H sign
+    qty = pd.to_numeric(grir_df['Quantity'], errors='coerce').fillna(0.0)
+    grir_df['Signed_Qty'] = np.where(grir_df['Dr/Cr Ind'] == 'H', -qty, qty)
+    grir_df['Signed_Amount_INR'] = np.where(grir_df['Dr/Cr Ind'] == 'H', -grir_df['Normalized_Amount_INR'], grir_df['Normalized_Amount_INR'])
+    
+    # Split GR and IR
+    grir_df['GR_Value_INR'] = np.where(grir_df['Trans Type'] == '1', grir_df['Signed_Amount_INR'], 0.0)
+    grir_df['IR_Value_INR'] = np.where(grir_df['Trans Type'] == '2', grir_df['Signed_Amount_INR'], 0.0)
+    grir_df['GR_Qty'] = np.where(grir_df['Trans Type'] == '1', grir_df['Signed_Qty'], 0.0)
+    grir_df['IR_Qty'] = np.where(grir_df['Trans Type'] == '2', grir_df['Signed_Qty'], 0.0)
+    
+    grir_df['Posting_Date_dt'] = pd.to_datetime(grir_df['Posting Date'], errors='coerce')
+    grir_df['GR_Date'] = np.where(grir_df['Trans Type'] == '1', grir_df['Posting_Date_dt'], pd.NaT)
+    grir_df['IR_Date'] = np.where(grir_df['Trans Type'] == '2', grir_df['Posting_Date_dt'], pd.NaT)
+    
+    grir_df['GR_Date'] = pd.to_datetime(grir_df['GR_Date'])
+    grir_df['IR_Date'] = pd.to_datetime(grir_df['IR_Date'])
+    
+    grir_df['is_gr'] = (grir_df['Trans Type'] == '1')
+    grir_df['is_ir'] = (grir_df['Trans Type'] == '2')
+    grir_df['is_reversal'] = (grir_df['Dr/Cr Ind'] == 'H')
+    grir_df['reversal_val'] = np.where(grir_df['Dr/Cr Ind'] == 'H', grir_df['Normalized_Amount_INR'], 0.0)
+    
+    # Aggregate by PO Number + PO Item
+    agg_df = grir_df.groupby(['PO Number', 'PO Item']).agg(
+        Net_GR_Val_INR=('GR_Value_INR', 'sum'),
+        Net_IR_Val_INR=('IR_Value_INR', 'sum'),
+        Net_GR_Qty=('GR_Qty', 'sum'),
+        Net_IR_Qty=('IR_Qty', 'sum'),
+        GR_Txn_Count=('is_gr', 'sum'),
+        IR_Txn_Count=('is_ir', 'sum'),
+        First_GR_Date=('GR_Date', 'min'),
+        First_IR_Date=('IR_Date', 'min'),
+        Last_GR_Date=('GR_Date', 'max'),
+        Last_IR_Date=('IR_Date', 'max'),
+        Reversal_Count_PO=('is_reversal', 'sum'),
+        Reversal_Value_INR_PO=('reversal_val', 'sum'),
+        Currency_Conversion_Missing_Count=('Currency_Conversion_Missing', 'sum')
     ).reset_index()
+    
+    # Calculate balance and exposure
+    agg_df['Open_Val_INR'] = agg_df['Net_GR_Val_INR'] - agg_df['Net_IR_Val_INR']
+    agg_df['Open_Exposure_INR'] = agg_df['Open_Val_INR'].abs()
+    agg_df['Open_Qty'] = agg_df['Net_GR_Qty'] - agg_df['Net_IR_Qty']
+    agg_df['Open_Qty_Exposure'] = agg_df['Open_Qty'].abs()
+    
+    # Classify status
+    tolerance = RECON_TOLERANCE
+    status_conds = [
+        (agg_df['Net_GR_Val_INR'] == 0) & (agg_df['Net_IR_Val_INR'] == 0),
+        agg_df['Open_Exposure_INR'] <= tolerance,
+        agg_df['Open_Val_INR'] > tolerance,
+        agg_df['Open_Val_INR'] < -tolerance
+    ]
+    status_choices = [
+        'No Activity',
+        'Reconciled',
+        'IR Pending',
+        'GR Pending'
+    ]
+    agg_df['Status'] = np.select(status_conds, status_choices, default='No Activity')
+    
+    # Bring in Exchange Rate and Currency from ekko_df to me2n_df first
+    ekko_cols_to_merge = ['PO Number', 'Exchange Rate', 'Currency']
+    ekko_for_merge = ekko_df[[c for c in ekko_cols_to_merge if c in ekko_df.columns]].drop_duplicates(subset=['PO Number'])
+    me2n_merged = me2n_df.merge(ekko_for_merge, on='PO Number', how='left')
+    me2n_merged['Exchange Rate'] = me2n_merged.get('Exchange Rate', pd.Series(1.0, index=me2n_merged.index)).fillna(1.0)
+    me2n_merged['Currency'] = me2n_merged.get('Currency', pd.Series('INR', index=me2n_merged.index)).fillna('INR')
 
-    ir_agg = grir[grir['Trans Type'] == '2'].groupby(['PO Number','PO Item']).agg(
-        ir_qty_s   = ('Quantity',  lambda x: x[grir.loc[x.index,'Dr/Cr Ind']=='S'].sum()),
-        ir_qty_h   = ('Quantity',  lambda x: x[grir.loc[x.index,'Dr/Cr Ind']=='H'].sum()),
-        ir_val_s   = ('Amt (LC)',  lambda x: x[grir.loc[x.index,'Dr/Cr Ind']=='S'].sum()),
-        ir_val_h   = ('Amt (LC)',  lambda x: x[grir.loc[x.index,'Dr/Cr Ind']=='H'].sum()),
-        ir_txn_count = ('Quantity','count'),
-        ir_doc_count = ('Document No','nunique') if 'Document No' in grir.columns else ('Quantity','count'),
-        earliest_ir  = ('Posting Date','min'),
-        latest_ir    = ('Posting Date','max'),
-        earliest_doc_date = ('Document Date','min'),
-    ).reset_index()
+    # Left join ME2N for metadata enrichment only
+    me2n_cols = ['PO Number', 'PO Item', 'Vendor', 'Plant', 'Material', 'Material Group', 
+                 'Short Text', 'Purchasing Group', 'Order Quantity', 'Net Order Value', 
+                 'Open value', 'Still to be delivered qty', 'Still to be delivered (qty)', 'Still to be invoiced (qty)', 'Still to be invoiced (val.)', 'Delivery date', 'Document Date', 'Net Price', 'Exchange Rate']
+    me2n_sub_cols = [c for c in me2n_cols if c in me2n_merged.columns]
+    me2n_sub = me2n_merged[me2n_sub_cols].drop_duplicates(subset=['PO Number', 'PO Item'])
+    
+    agg_df = agg_df.merge(me2n_sub, on=['PO Number', 'PO Item'], how='left')
+    
+    # Fill missing Vendor, Plant etc. with defaults
+    if 'Vendor' in agg_df.columns:
+        agg_df['Vendor'] = agg_df['Vendor'].fillna('Unknown')
+    if 'Plant' in agg_df.columns:
+        agg_df['Plant'] = agg_df['Plant'].fillna('Unknown')
+    if 'Material' in agg_df.columns:
+        agg_df['Material'] = agg_df['Material'].fillna('Unknown')
+    if 'Material Group' in agg_df.columns:
+        agg_df['Material Group'] = agg_df['Material Group'].fillna('Unknown')
+    if 'Short Text' in agg_df.columns:
+        agg_df['Short Text'] = agg_df['Short Text'].fillna('Unknown')
+        
+    # Aging logic
+    first_gr = pd.to_datetime(agg_df['First_GR_Date'])
+    first_ir = pd.to_datetime(agg_df['First_IR_Date'])
+    max_last = pd.to_datetime(agg_df[['Last_GR_Date', 'Last_IR_Date']].max(axis=1))
+    
+    # Extract Document Date from ME2N or fallback to EKKO Document Date (if available)
+    doc_date = pd.NaT
+    if 'Document Date' in agg_df.columns:
+        doc_date = pd.to_datetime(agg_df['Document Date'])
+    elif 'Document Date' in ekko_df.columns:
+        ekko_dates = ekko_df[['PO Number', 'Document Date']].drop_duplicates(subset=['PO Number'])
+        agg_df = agg_df.merge(ekko_dates, on='PO Number', how='left', suffixes=('', '_EKKO'))
+        if 'Document Date_EKKO' in agg_df.columns:
+            doc_date = pd.to_datetime(agg_df['Document Date_EKKO'])
+            
+    cond_ir_pending = agg_df['Status'] == 'IR Pending'
+    cond_gr_pending = agg_df['Status'] == 'GR Pending'
+    cond_recon = agg_df['Status'] == 'Reconciled'
+    cond_else = ~(cond_ir_pending | cond_gr_pending | cond_recon)
+    
+    agg_df['Aging_Start_Date'] = pd.NaT
+    agg_df.loc[cond_ir_pending, 'Aging_Start_Date'] = first_gr
+    agg_df.loc[cond_gr_pending, 'Aging_Start_Date'] = first_ir
+    agg_df.loc[cond_recon, 'Aging_Start_Date'] = max_last
+    agg_df.loc[cond_else, 'Aging_Start_Date'] = doc_date
+    
+    agg_df['Aging_Start_Date'] = pd.to_datetime(agg_df['Aging_Start_Date'])
+    
+    # Calculate Days Open
+    agg_df['Days_Open'] = (analysis_date - agg_df['Aging_Start_Date']).dt.days
+    agg_df['Days_Open'] = agg_df['Days_Open'].fillna(0).astype(int)
+    
+    # Classify into aging bucket
+    agg_df['Aging_Bucket'] = agg_df['Days_Open'].apply(aging_bucket)
+    
+    # Keep legacy/expected column names for compatibility
+    agg_df['net_gr_qty'] = agg_df['Net_GR_Qty']
+    agg_df['net_ir_qty'] = agg_df['Net_IR_Qty']
+    agg_df['open_qty'] = agg_df['Open_Qty']
+    agg_df['net_gr_val'] = agg_df['Net_GR_Val_INR']
+    agg_df['net_ir_val'] = agg_df['Net_IR_Val_INR']
+    agg_df['open_val'] = agg_df['Open_Val_INR']
+    agg_df['exposure_val'] = agg_df['Open_Exposure_INR']
+    agg_df['days_open'] = agg_df['Days_Open']
+    agg_df['aging_bucket'] = agg_df['Aging_Bucket']
+    agg_df['status'] = agg_df['Status']
+    agg_df['reconciled'] = agg_df['Status'] == 'Reconciled'
+    agg_df['posting_date'] = agg_df['Aging_Start_Date']
+    agg_df['amount_matched'] = agg_df['reconciled']
+    agg_df['net_gr_qty_grir'] = agg_df['Net_GR_Qty']
+    agg_df['material_key'] = agg_df['Material'].fillna(agg_df.get('Short Text', '')).fillna('Unknown').astype(str).str.strip()
+    agg_df['material_label'] = agg_df['Material'].fillna('').astype(str) + " - " + agg_df.get('Short Text', '').fillna('').astype(str)
+    agg_df['material_label'] = agg_df['material_label'].str.strip(' -')
+    
+    # Reversal info (Legacy compatibility)
+    agg_df['ir_reversal_qty'] = 0.0
+    agg_df['ir_reversal_val'] = 0.0
+    agg_df['gr_reversal_qty'] = 0.0
+    agg_df['gr_reversal_val'] = 0.0
+    agg_df['reversal_pct'] = 0.0
+    agg_df['ir_reversal_val'] = agg_df['Reversal_Value_INR_PO']
+    agg_df['reversal_pct'] = np.where(agg_df['Net_IR_Qty'] != 0, (agg_df['Reversal_Value_INR_PO'] / agg_df['Net_IR_Qty']).clip(0, 100), 0.0)
 
-    # Merge exchange rates first — rename EKKO Currency to avoid collision with ME2N Currency column
-    print("  Merging ME2N with EKKO exchange rates ...")
-    ekko_for_merge = ekko[['Purchasing Document', 'Exchange Rate', 'Currency']].rename(
-        columns={'Currency': 'PO_Currency'}
-    ).drop_duplicates(subset=['Purchasing Document'])
+    # Invoice completion percentage
+    agg_df['inv_completion_pct'] = np.where(
+        agg_df['net_gr_qty'] > 0,
+        (agg_df['net_ir_qty'] / agg_df['net_gr_qty'] * 100).clip(0, 100),
+        0.0
+    )
 
-    me2n_mapped = me2n.merge(ekko_for_merge, on='Purchasing Document', how='left')
-    me2n_mapped['Exchange Rate'] = me2n_mapped['Exchange Rate'].fillna(1.0)
-    me2n_mapped['PO_Currency']   = me2n_mapped['PO_Currency'].fillna('INR')
-    # Canonical Currency = EKKO PO header currency (used for exchange rate conversion)
-    me2n_mapped['Currency']      = me2n_mapped['PO_Currency']
-
-    # Create Normalized INR Fields
-    me2n_mapped['Net_Order_Value_INR'] = me2n_mapped['Net Order Value'] * me2n_mapped['Exchange Rate']
-    me2n_mapped['Open_Value_INR']      = me2n_mapped['Open value'] * me2n_mapped['Exchange Rate']
-
-    print("  Merging with GR/IR postings ...")
-    me2n_key = me2n_mapped[['Purchasing Document','Item',
-                      'Vendor','Short Text','Material','Material Group','Plant',
-                      'Order Quantity','Still to be delivered (qty)',
-                      'Net Price','Net Order Value','Net_Order_Value_INR','Open_Value_INR',
-                      'Still to be invoiced (qty)','Still to be invoiced (val.)',
-                      'Open value','Total open value',
-                      'Still to be delivered (value)',
-                      'Deletion indicator','Document Date','Delivery date',
-                      'Purchasing Group', 'Exchange Rate', 'Currency']].copy()
-    me2n_key.rename(columns={
-        'Purchasing Document': 'PO Number',
-        'Item': 'PO Item',
-    }, inplace=True)
-
-    df = me2n_key.copy()
-    df = df.merge(ir_agg, on=['PO Number','PO Item'], how='left')
-    df = df.merge(gr_agg, on=['PO Number','PO Item'], how='left')
-
-    num_cols = ['gr_qty_s','gr_qty_h','gr_val_s','gr_val_h',
-                'ir_qty_s','ir_qty_h','ir_val_s','ir_val_h',
-                'ir_txn_count','ir_doc_count','gr_txn_count']
-    for c in num_cols:
-        if c in df.columns:
-            df[c] = df[c].fillna(0)
-
-    df['net_gr_qty_grir'] = df.get('gr_qty_s', 0) - df.get('gr_qty_h', 0)
-    df['net_gr_val_grir'] = df.get('gr_val_s', 0) - df.get('gr_val_h', 0)
-    df['net_ir_qty']      = df.get('ir_qty_s', 0) - df.get('ir_qty_h', 0)
-    df['net_ir_val']      = df.get('ir_val_s', 0) - df.get('ir_val_h', 0)
-
-    # GR = Order Qty - Still to deliver
-    df['net_gr_qty'] = df['Order Quantity'] - df['Still to be delivered (qty)']
-    # GR value normalized in INR
-    df['net_gr_val'] = (df['Net Order Value'] - df['Still to be delivered (value)']) * df['Exchange Rate']
-
-    # Use GRIR overrides
-    mask_gr = df['net_gr_qty_grir'].abs() > 0
-    df.loc[mask_gr, 'net_gr_qty'] = df.loc[mask_gr, 'net_gr_qty_grir']
-    df.loc[mask_gr, 'net_gr_val'] = df.loc[mask_gr, 'net_gr_val_grir']
-
-    df['open_qty'] = df['net_gr_qty'] - df['net_ir_qty']
-    df['open_val'] = df['net_gr_val'] - df['net_ir_val']
-    df['exposure_val'] = (df['net_gr_val'] - df['net_ir_val']).abs()
-
-    # Cross-check ME2N open values (normalized in INR)
-    mask_me2n_open = (df['Still to be invoiced (qty)'].abs() > 0.01) & (df['open_qty'].abs() < 0.01)
-    df.loc[mask_me2n_open, 'open_qty'] = df.loc[mask_me2n_open, 'Still to be invoiced (qty)']
-    df.loc[mask_me2n_open, 'open_val'] = df.loc[mask_me2n_open, 'Still to be invoiced (val.)'] * df.loc[mask_me2n_open, 'Exchange Rate']
-
-    df['inv_completion_pct'] = np.where(
-        df['net_gr_qty'] > 0,
-        (df['net_ir_qty'] / df['net_gr_qty'] * 100).clip(-200, 200),
+    # Price Variance calculations (Legacy compatibility)
+    agg_df['invoice_price'] = np.where(agg_df['net_ir_qty'] > 0, agg_df['net_ir_val'] / agg_df['net_ir_qty'], agg_df['Net Price'] * agg_df['Exchange Rate'])
+    agg_df['po_price_inr']   = agg_df['Net Price'] * agg_df['Exchange Rate']
+    agg_df['price_var_abs'] = (agg_df['invoice_price'] - agg_df['po_price_inr']) * agg_df['net_ir_qty']
+    agg_df['price_var_pct'] = np.where(
+        agg_df['po_price_inr'] > 0,
+        ((agg_df['invoice_price'] - agg_df['po_price_inr']) / agg_df['po_price_inr'] * 100).clip(-200, 200),
         0
     )
+    # Zero out price variance if no IR quantity or Net Price is zero
+    mask_zero_pv = (agg_df['net_ir_qty'] == 0) | (agg_df['Net Price'] == 0)
+    agg_df.loc[mask_zero_pv, 'price_var_abs'] = 0.0
+    agg_df.loc[mask_zero_pv, 'price_var_pct'] = 0.0
+    
+    # Add dummy/fallback columns for ME2N quantities to keep downstream KPI math happy
+    if 'Net_Order_Value_INR' not in agg_df.columns:
+        if 'Net Order Value' in agg_df.columns:
+            ex_rate = agg_df.get('Exchange Rate', pd.Series(1.0, index=agg_df.index)).fillna(1.0)
+            agg_df['Net_Order_Value_INR'] = agg_df['Net Order Value'] * ex_rate
+        else:
+            agg_df['Net_Order_Value_INR'] = 0.0
 
-    df['ir_reversal_qty'] = df.get('ir_qty_h', 0)
-    df['ir_reversal_val'] = df.get('ir_val_h', 0)
-    df['gr_reversal_qty'] = df.get('gr_qty_h', 0)
-    df['gr_reversal_val'] = df.get('gr_val_h', 0)
-    df['reversal_pct']    = np.where(
-        df.get('ir_qty_s', 0) > 0,
-        (df.get('ir_qty_h', 0) / df.get('ir_qty_s', 1) * 100).clip(0, 100),
-        0
+    # Add dummy/fallback columns for ME2N quantities to keep downstream KPI math happy
+    if 'Still to be delivered (qty)' not in agg_df.columns:
+        agg_df['Still to be delivered (qty)'] = 0.0
+    if 'Still to be invoiced (qty)' not in agg_df.columns:
+        agg_df['Still to be invoiced (qty)'] = 0.0
+    if 'Still to be invoiced (val.)' not in agg_df.columns:
+        agg_df['Still to be invoiced (val.)'] = 0.0
+    if 'Net Price' not in agg_df.columns:
+        agg_df['Net Price'] = 0.0
+    if 'Exchange Rate' not in agg_df.columns:
+        agg_df['Exchange Rate'] = 1.0
+
+    # Risk scoring (Legacy compatibility using 0-100 scale)
+    risk_results = agg_df.apply(
+        lambda r: compute_risk(
+            r['Status'],
+            r['Open_Val_INR'],
+            r['Aging_Bucket'],
+            r['reversal_pct'],
+            r['price_var_pct']
+        ),
+        axis=1
     )
-
-    # Price variance comparison (Invoice unit price vs PO net price, in INR)
-    df['invoice_price'] = np.where(df['net_ir_qty'] > 0, df['net_ir_val'] / df['net_ir_qty'], df['Net Price'] * df['Exchange Rate'])
-    df['po_price_inr']   = df['Net Price'] * df['Exchange Rate']
-    df['price_var_abs'] = (df['invoice_price'] - df['po_price_inr']) * df['net_ir_qty']
-    df['price_var_pct'] = np.where(
-        df['po_price_inr'] > 0,
-        ((df['invoice_price'] - df['po_price_inr']) / df['po_price_inr'] * 100).clip(-200, 200),
-        0
-    )
-
-    df['posting_date'] = df.get('earliest_ir', pd.NaT)
-    mask_no_posting = df['posting_date'].isna()
-    if 'earliest_gr' in df.columns:
-        df.loc[mask_no_posting, 'posting_date'] = df.loc[mask_no_posting, 'earliest_gr']
-    mask_still_no = df['posting_date'].isna()
-    df.loc[mask_still_no, 'posting_date'] = df.loc[mask_still_no, 'Document Date']
-
-    df['days_open'] = df['posting_date'].apply(
-        lambda d: (ANALYSIS_DATE - d).days if pd.notna(d) else None)
-
-    df['aging_bucket'] = df['days_open'].apply(aging_bucket)
-    df['status'] = df.apply(classify_status, axis=1)
-    tol = RECON_TOLERANCE
-    df['amount_matched'] = (
-        (df['exposure_val'] < tol) &
-        (df['net_gr_qty'] - df['net_ir_qty']).abs() < tol
-    )
-    df['reconciled'] = df['amount_matched']
-    df['material_key'] = df.apply(material_key, axis=1)
-    df['material_label'] = df.apply(material_label, axis=1)
-
-    # Risk Engine Calculations
-    risk_results = df.apply(lambda r: compute_row_risk(r, r['reconciled']), axis=1)
-    df['risk_score'] = [x[0] for x in risk_results]
-    df['risk_level'] = [x[1] for x in risk_results]
-
-    print(f"  Reconciliation complete: {len(df):,} PO line items")
-    return df
+    agg_df['risk_score'] = [x[0] for x in risk_results]
+    agg_df['risk_level'] = [x[1] for x in risk_results]
+        
+    print(f"  Reconciliation complete: {len(agg_df):,} PO line items")
+    return agg_df
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -552,35 +705,37 @@ def build_kpis(df, ekko=None):
     total_open_signed = df['open_val'].sum()
     total_open_q = df['open_qty'].sum()
 
-    recon_count = int(df['amount_matched'].sum())
-    recon_rate  = recon_count / total_items * 100 if total_items else 0
+    recon_count = (df['Status'] == 'Reconciled').sum()
+    recon_rate  = recon_count / total_items * 100 if total_items else 0.0
 
-    status_dist = df['status'].value_counts().to_dict()
+    status_dist = df['Status'].value_counts().to_dict()
     risk_dist   = df['risk_level'].value_counts().to_dict()
 
-    pending_invoice_val = df[df['status'].isin(['GR ONLY','PARTIALLY INVOICED'])]['open_val'].sum()
-    over_inv_val        = df[df['status'] == 'OVER INVOICED']['open_val'].abs().sum()
-    ir_only_val         = df[df['status'] == 'IR ONLY']['net_ir_val'].sum()
-    total_reversals_val = df['ir_reversal_val'].sum()
+    pending_invoice_val = df[df['Status'] == 'IR Pending']['Open_Exposure_INR'].sum()
+    over_inv_val        = df[df['Status'] == 'GR Pending']['Open_Exposure_INR'].sum()
+    ir_only_val         = df[df['Status'] == 'GR Pending']['Open_Exposure_INR'].sum()
+    total_reversals_val = df['Reversal_Value_INR_PO'].sum() if 'Reversal_Value_INR_PO' in df.columns else 0.0
 
-    spend_by_vendor = df.groupby('Vendor')['Net_Order_Value_INR'].sum().sort_values(ascending=False)
-    spend_by_matgrp = df.groupby('Material Group')['Net_Order_Value_INR'].sum().sort_values(ascending=False)
-    spend_by_purchgrp = df.groupby('Purchasing Group')['Net_Order_Value_INR'].sum().sort_values(ascending=False)
+    spend_by_vendor = df.groupby('Vendor')['Net_Order_Value_INR'].sum().sort_values(ascending=False) if 'Vendor' in df.columns and 'Net_Order_Value_INR' in df.columns else pd.Series()
+    spend_by_matgrp = df.groupby('Material Group')['Net_Order_Value_INR'].sum().sort_values(ascending=False) if 'Material Group' in df.columns and 'Net_Order_Value_INR' in df.columns else pd.Series()
+    spend_by_purchgrp = df.groupby('Purchasing Group')['Net_Order_Value_INR'].sum().sort_values(ascending=False) if 'Purchasing Group' in df.columns and 'Net_Order_Value_INR' in df.columns else pd.Series()
 
     company_codes = []
     if ekko is not None and 'Company Code' in ekko.columns:
         company_codes = sorted(ekko['Company Code'].dropna().astype(str).unique().tolist())
+    elif 'EKKO_Company_Code' in df.columns:
+        company_codes = sorted(df['EKKO_Company_Code'].dropna().astype(str).unique().tolist())
 
     return {
         'total_po_items':        int(total_items),
         'total_gr_value':        round(float(total_gr_val), 2),
         'total_ir_value':        round(float(total_ir_val), 2),
-        'total_open_value':      round(float(total_open_exposure), 2),
+        'total_open_value':      round(float(total_open_signed), 2),
         'total_open_value_signed': round(float(total_open_signed), 2),
         'total_open_qty':        round(float(total_open_q), 2),
         'reconciliation_rate':   round(float(recon_rate), 1),
-        'reconciled_count':      recon_count,
-        'matched_lines':         recon_count,
+        'reconciled_count':      int(recon_count),
+        'matched_lines':         int(recon_count),
         'unmatched_lines':       int(total_items - recon_count),
         'open_item_count':       int(total_items - recon_count),
         'critical_items':        int((df['risk_level'] == 'CRITICAL').sum()),
@@ -596,7 +751,7 @@ def build_kpis(df, ekko=None):
         'unique_vendors':        int(df['Vendor'].nunique()),
         'unique_pos':            int(df['PO Number'].nunique()),
         'unique_plants':         int(df['Plant'].nunique()),
-        'total_materials':       int(df['material_key'].nunique()),
+        'total_materials':       int(df['material_key'].nunique()) if 'material_key' in df.columns else int(df['Material'].nunique()),
         'total_procurement_spend_inr': round(float(df['Net_Order_Value_INR'].sum()), 2),
         'top_supplier':          str(spend_by_vendor.index[0]) if len(spend_by_vendor) else 'N/A',
         'top_material_group':    str(spend_by_matgrp.index[0]) if len(spend_by_matgrp) else 'N/A',
@@ -609,7 +764,7 @@ def build_kpis(df, ekko=None):
 
 
 def build_aging(df):
-    buckets = ['0-30', '31-60', '61-90', '91-180', '180+']
+    buckets = ['0-30', '31-60', '61-90', '91-180', '181-365', '365+']
     result = []
     for b in buckets:
         sub = df[df['aging_bucket'] == b]
@@ -620,10 +775,10 @@ def build_aging(df):
             'open_count':      int(len(open_sub)),
             'open_value':      round(float(open_sub['exposure_val'].sum()), 2),
             'exposure':        round(float(open_sub['exposure_val'].sum()), 2),
-            'gr_only_val':     round(float(sub[sub['status']=='GR ONLY']['open_val'].sum()), 2),
-            'partial_inv_val': round(float(sub[sub['status']=='PARTIALLY INVOICED']['open_val'].sum()), 2),
-            'over_inv_val':    round(float(sub[sub['status']=='OVER INVOICED']['open_val'].abs().sum()), 2),
-            'ir_only_val':     round(float(sub[sub['status']=='IR ONLY']['net_ir_val'].sum()), 2),
+            'gr_only_val':     round(float(sub[sub['status']=='IR Pending']['open_val'].sum()), 2),
+            'partial_inv_val': 0.0,
+            'over_inv_val':    round(float(sub[sub['status']=='GR Pending']['open_val'].abs().sum()), 2),
+            'ir_only_val':     0.0,
         })
     return result
 
@@ -1068,7 +1223,7 @@ def build_recommended_actions(df, kpis):
     return actions
 
 
-def build_executive_summary(df, kpis):
+def build_executive_summary(df, kpis, analysis_date=None):
     open_val   = kpis['total_open_value']
     open_cr    = abs(open_val) / 1e7
     total_items= kpis['total_po_items']
@@ -1311,6 +1466,15 @@ def main():
         'charts': {
             'risk_level': kpis.get('risk_distribution', {}),
             'status': kpis.get('status_distribution', {})
+        },
+        'management_summary': {
+            'analysis_date':      ANALYSIS_DATE.strftime('%d %B %Y'),
+            'total_po_items':     kpis['total_po_items'],
+            'open_exposure_cr':   round(abs(kpis['total_open_value'])/1e7, 2),
+            'reconciliation_rate':kpis['reconciliation_rate'],
+            'critical_items':     kpis['critical_items'],
+            'status_distribution':kpis['status_distribution'],
+            'risk_distribution':  kpis['risk_distribution'],
         },
 
         # ── Backward compatibility keys for dashboard UI ──

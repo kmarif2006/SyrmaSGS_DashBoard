@@ -19,7 +19,7 @@ import pandas as pd
 import numpy as np
 
 # ── Path setup ───────────────────────────────────────────────────────────────
-BASE_DIR   = r"c:\SyrmaSGS_DashBoard"
+BASE_DIR   = r"c:\project\SyrmaSGS_DashBoard"
 OUTPUT_JSON = os.path.join(BASE_DIR, "grir_analysis_output.json")
 GRIR_CSV   = os.path.join(BASE_DIR, "grir.csv")
 EKKO_CSV   = os.path.join(BASE_DIR, "EKKO.csv")
@@ -171,9 +171,7 @@ class TestGRIRBusinessLogic:
         """
         CORE VALIDATION: SUM(open_val) == SUM(net_gr_val) - SUM(net_ir_val) for non-overridden rows.
         """
-        # Determine which rows were overridden by ME2N Still to be Invoiced value
-        overridden = (reconciled["Still to be invoiced (qty)"].abs() > 0.01) & \
-                     ((reconciled["net_gr_qty"] - reconciled["net_ir_qty"]).abs() < 0.01)
+        overridden = pd.Series(False, index=reconciled.index)
         
         sum_gr  = reconciled.loc[~overridden, "net_gr_val"].sum()
         sum_ir  = reconciled.loc[~overridden, "net_ir_val"].sum()
@@ -188,8 +186,7 @@ class TestGRIRBusinessLogic:
 
     def test_open_val_per_row_formula(self, reconciled):
         """For every non-overridden row: open_val == net_gr_val - net_ir_val."""
-        overridden = (reconciled["Still to be invoiced (qty)"].abs() > 0.01) & \
-                     ((reconciled["net_gr_qty"] - reconciled["net_ir_qty"]).abs() < 0.01)
+        overridden = pd.Series(False, index=reconciled.index)
         sub = reconciled[~overridden]
         diff = (sub["open_val"] - (sub["net_gr_val"] - sub["net_ir_val"])).abs()
         max_diff = diff.max() if not diff.empty else 0
@@ -215,14 +212,14 @@ class TestKPICalculations:
 
     def test_reconciliation_rate_formula(self, reconciled, kpis):
         """Rate = reconciled_count / total_po_items * 100."""
-        recon_count = (reconciled["status"] == "FULLY RECONCILED").sum()
+        recon_count = (reconciled["status"] == "Reconciled").sum()
         expected_rate = recon_count / len(reconciled) * 100
         # Allow minor rounding discrepancy due to round(..., 1) in production
         assert abs(kpis["reconciliation_rate"] - expected_rate) < 0.15, \
             f"Reconciliation rate wrong: expected {expected_rate:.1f}, got {kpis['reconciliation_rate']}"
 
     def test_reconciled_count_matches(self, reconciled, kpis):
-        recon_count = int((reconciled["status"] == "FULLY RECONCILED").sum())
+        recon_count = int((reconciled["status"] == "Reconciled").sum())
         assert kpis["reconciled_count"] == recon_count
 
     def test_open_item_count(self, kpis):
@@ -248,9 +245,8 @@ class TestKPICalculations:
         gr   = kpis["total_gr_value"]
         ir   = kpis["total_ir_value"]
         open_ = kpis["total_open_value"]
-        overridden_mask = (reconciled["Still to be invoiced (qty)"].abs() > 0.01) & \
-                          ((reconciled["net_gr_qty"] - reconciled["net_ir_qty"]).abs() < 0.01)
-        overridden_sum = reconciled.loc[overridden_mask, "Still to be invoiced (val.)"].sum()
+        overridden_mask = pd.Series(False, index=reconciled.index)
+        overridden_sum = 0
         # Identity holds once we account for the overridden amount
         assert abs(open_ - (gr - ir + overridden_sum)) < 10.0, \
             f"KPI Identity: open={open_:.2f}, gr-ir+overridden={gr-ir+overridden_sum:.2f}"
@@ -272,9 +268,9 @@ class TestKPICalculations:
         assert kpis["total_materials"] > 0
 
     def test_pending_invoice_val_composition(self, reconciled, kpis):
-        """Pending = GR ONLY + PARTIALLY INVOICED open values."""
+        """Pending = IR Pending open values."""
         pending = reconciled[
-            reconciled["status"].isin(["GR ONLY", "PARTIALLY INVOICED"])
+            reconciled["status"] == "IR Pending"
         ]["open_val"].sum()
         assert abs(kpis["pending_invoice_val"] - pending) < 1.0
 
@@ -298,12 +294,18 @@ class TestKPICalculations:
 class TestStatusClassification:
 
     def _make_row(self, gr_qty=0, ir_qty=0, open_qty=0, open_val=0,
-                  rev_pct=0, inv_pct=0, pv_pct=0):
+                  rev_pct=0, inv_pct=0, pv_pct=0, gr_val=None, ir_val=None):
+        if gr_val is None:
+            gr_val = gr_qty * 1000.0
+        if ir_val is None:
+            ir_val = ir_qty * 1000.0
         return {
             "net_gr_qty": gr_qty,
             "net_ir_qty": ir_qty,
             "open_qty":   open_qty,
             "open_val":   open_val,
+            "net_gr_val": gr_val,
+            "net_ir_val": ir_val,
             "reversal_pct":      rev_pct,
             "inv_completion_pct": inv_pct,
             "price_var_pct":     pv_pct,
@@ -311,43 +313,41 @@ class TestStatusClassification:
 
     def test_fully_reconciled(self):
         row = self._make_row(gr_qty=10, ir_qty=10, open_qty=0, open_val=0)
-        assert classify_status(row) == "FULLY RECONCILED"
+        assert classify_status(row) == "Reconciled"
 
     def test_gr_only(self):
         row = self._make_row(gr_qty=5, ir_qty=0, open_qty=5, open_val=50000)
-        assert classify_status(row) == "GR ONLY"
+        assert classify_status(row) == "IR Pending"
 
     def test_ir_only(self):
         row = self._make_row(gr_qty=0, ir_qty=5, open_qty=-5, open_val=-50000)
-        assert classify_status(row) == "IR ONLY"
+        assert classify_status(row) == "GR Pending"
 
     def test_partially_invoiced(self):
         row = self._make_row(gr_qty=10, ir_qty=5, open_qty=5, open_val=25000)
-        assert classify_status(row) == "PARTIALLY INVOICED"
+        assert classify_status(row) == "IR Pending"
 
     def test_over_invoiced(self):
         row = self._make_row(gr_qty=5, ir_qty=10, open_qty=-5, open_val=-50000)
-        assert classify_status(row) == "OVER INVOICED"
+        assert classify_status(row) == "GR Pending"
 
     def test_price_variance(self):
         # Qty matched, but value mismatch
         row = self._make_row(gr_qty=10, ir_qty=10, open_qty=0, open_val=5000)
-        assert classify_status(row) == "PRICE VARIANCE"
+        assert classify_status(row) == "IR Pending"
 
     def test_fully_reversed_by_pct(self):
-        row = self._make_row(gr_qty=0, ir_qty=0, rev_pct=100)
-        assert classify_status(row) == "FULLY REVERSED"
+        row = self._make_row(gr_qty=0, ir_qty=0, rev_pct=100, gr_val=0, ir_val=0, open_val=0)
+        assert classify_status(row) == "No Activity"
 
     def test_fully_reversed_by_qty(self):
-        row = self._make_row(gr_qty=0, ir_qty=0)
-        assert classify_status(row) == "FULLY REVERSED"
+        row = self._make_row(gr_qty=0, ir_qty=0, gr_val=0, ir_val=0, open_val=0)
+        assert classify_status(row) == "No Activity"
 
     def test_no_unknown_statuses(self, reconciled):
         """All produced statuses must be known categories."""
         known = {
-            "FULLY RECONCILED", "FULLY REVERSED", "GR ONLY", "IR ONLY",
-            "PARTIALLY INVOICED", "OVER INVOICED", "PRICE VARIANCE",
-            "PARTIALLY REVERSED", "CLOSED",
+            "Reconciled", "No Activity", "IR Pending", "GR Pending"
         }
         unknown = set(reconciled["status"].unique()) - known
         assert not unknown, f"Unknown status values: {unknown}"
@@ -424,12 +424,11 @@ class TestReversalHandling:
         assert (reconciled["reversal_pct"] <= 100).all(), "reversal_pct > 100 found"
 
     def test_fully_reversed_items_near_zero_balance(self, reconciled):
-        """FULLY REVERSED items should have near-zero open balance, except when overridden by ME2N."""
-        full_rev = reconciled[reconciled["status"] == "FULLY REVERSED"]
+        """Reconciled or reversed items should have near-zero open balance."""
+        full_rev = reconciled[reconciled["status"].isin(["Reconciled", "No Activity"])]
         if len(full_rev) == 0:
-            pytest.skip("No FULLY REVERSED items in dataset")
-        overridden_mask = (full_rev["Still to be invoiced (qty)"].abs() > 0.01) & \
-                          ((full_rev["net_gr_qty"] - full_rev["net_ir_qty"]).abs() < 0.01)
+            pytest.skip("No Reconciled or No Activity items in dataset")
+        overridden_mask = pd.Series(False, index=full_rev.index)
         max_open = full_rev.loc[~overridden_mask, "open_val"].abs().max()
         # Allow small rounding artifacts
         assert max_open < 100.0, \
@@ -604,9 +603,9 @@ class TestAPIIntegration:
         assert len(data["items"]) <= 10
 
     def test_grir_items_filter_by_status(self):
-        data = self._get("/api/grir/items", {"status": "GR ONLY", "limit": 5})
+        data = self._get("/api/grir/items", {"status": "IR Pending", "limit": 5})
         for item in data["items"]:
-            assert item["status"] == "GR ONLY"
+            assert item["status"] == "IR Pending"
 
     def test_grir_items_filter_by_risk(self):
         data = self._get("/api/grir/items", {"risk_level": "CRITICAL", "limit": 5})
@@ -671,9 +670,8 @@ class TestOutputJSON:
         gr   = kpis["total_gr_value"]
         ir   = kpis["total_ir_value"]
         open_ = kpis["total_open_value"]
-        overridden_mask = (reconciled["Still to be invoiced (qty)"].abs() > 0.01) & \
-                          ((reconciled["net_gr_qty"] - reconciled["net_ir_qty"]).abs() < 0.01)
-        overridden_sum = reconciled.loc[overridden_mask, "Still to be invoiced (val.)"].sum()
+        overridden_mask = pd.Series(False, index=reconciled.index)
+        overridden_sum = 0
         assert abs(open_ - (gr - ir + overridden_sum)) < 10.0, \
             f"JSON KPI identity: open={open_:.2f}, gr-ir+overridden={gr-ir+overridden_sum:.2f}"
 
@@ -689,7 +687,7 @@ class TestOutputJSON:
 
     def test_top_exceptions_are_non_reconciled(self, output_json):
         for exc in output_json["top_exceptions"]:
-            assert exc["status"] not in ("FULLY RECONCILED", "FULLY REVERSED"), \
+            assert exc["status"] not in ("Reconciled", "No Activity"), \
                 f"Exception item has status: {exc['status']}"
 
     def test_recommended_actions_have_required_fields(self, output_json):
