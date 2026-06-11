@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MessageSquare, X, Send, Bot, Sparkles, AlertCircle, Trash2 } from 'lucide-react'
-import { fetchChat } from '../lib/api'
+import { fetchChat } from '../lib'
 
 export default function ChatBot({ filters }) {
   const [isOpen, setIsOpen] = useState(false)

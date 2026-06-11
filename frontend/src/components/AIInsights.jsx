@@ -2,7 +2,7 @@ import { motion } from 'framer-motion'
 import {
   TrendingUp, PieChart, Factory, Building2, Clock, Trash2, BarChart3, Lightbulb
 } from 'lucide-react'
-import { cn } from '../lib/utils'
+import { cn } from '../lib'
 
 const iconMap = { TrendingUp, PieChart, Factory, Building2, Clock, Trash2, BarChart3 }
 const severityMap = {

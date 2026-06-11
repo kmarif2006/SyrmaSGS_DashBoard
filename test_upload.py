@@ -21,19 +21,19 @@ print(f"  EKKO: {len(ekko_df)} rows, {len(ekko_df.columns)} columns")
 # Test with the Flask test client
 with app.test_client() as client:
     # Prepare file data
-    files = {
-        'file': [
-            ('grir.csv', open('grir.csv', 'rb'), 'text/csv'),
-            ('me2n.csv', open('me2n.csv', 'rb'), 'text/csv'),
-            ('EKKO.csv', open('EKKO.csv', 'rb'), 'text/csv'),
-        ]
-    }
-    
-    # Upload files
-    response = client.post(
-        '/api/grir/upload-files',
-        data=files
-    )
+    with open('grir.csv', 'rb') as grir_file, open('me2n.csv', 'rb') as me2n_file, open('EKKO.csv', 'rb') as ekko_file:
+        files = {
+            'grir': (grir_file, 'grir.csv'),
+            'me2n': (me2n_file, 'me2n.csv'),
+            'ekko': (ekko_file, 'EKKO.csv'),
+        }
+        
+        # Upload files
+        response = client.post(
+            '/api/grir/upload-files',
+            data=files,
+            content_type='multipart/form-data'
+        )
     
     print(f"\nUpload response: {response.status_code}")
     resp_data = response.get_json()

@@ -1,8 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import UploadPage from './pages/UploadPage'
-import DashboardPage from './pages/DashboardPage'
-import GrirDashboard from './pages/GrirDashboard'
-import GrirAnalyticsDashboard from './pages/GrirAnalyticsDashboard'
+import { UploadPage, DashboardPage, GrirDashboard, GrirAnalyticsDashboard } from '../features'
 
 export default function App() {
   return (

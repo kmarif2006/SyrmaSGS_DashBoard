@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ChevronDown, SlidersHorizontal, X } from 'lucide-react'
-import { cn } from '../lib/utils'
+import { cn } from '../lib'
 
 function FilterSelect({ label, options, value, onChange, multi = false }) {
   return (

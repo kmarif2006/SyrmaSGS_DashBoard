@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { formatINR, formatNumber, cn } from '../lib/utils'
+import { formatINR, formatNumber, cn } from '../lib'
 
 const gradients = [
   'from-indigo-500 to-violet-600',

@@ -1,0 +1,1 @@
+"""Backend package for shared app state and core utilities."""

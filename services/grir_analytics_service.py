@@ -594,13 +594,7 @@ def reconcile(grir, me2n, ekko, analysis_date):
     )
     df['reconciled'] = df['amount_matched']
 
-    status = np.full(len(df), 'Open Issue', dtype=object)
-    status[df['open_val'] > 0] = 'Price Variance'
-    status[df['open_qty'] > 0] = 'Partial Invoice'
-    status[(df['net_ir_qty'] > 0) & (df['net_gr_qty'] <= 0)] = 'IR No GR'
-    status[(df['net_gr_qty'] > 0) & (df['net_ir_qty'] <= 0)] = 'GR No IR'
-    status[df['amount_matched']] = 'Reconciled'
-    df['status'] = status
+    df['status'] = df.apply(classify_status, axis=1)
 
     df['material_key'] = df['Material'].fillna(df.get('Short Text', '')).fillna('Unknown').astype(str).str.strip()
     df['material_label'] = df['Material'].fillna('').astype(str) + " - " + df.get('Short Text', '').fillna('').astype(str)

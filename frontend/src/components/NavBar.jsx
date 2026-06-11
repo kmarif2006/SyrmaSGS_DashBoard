@@ -1,9 +1,7 @@
 import { useState, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { fetchSearch, getExportUrl } from '../lib/api'
-import { truncate } from '../lib/utils'
-import { exportToPDF } from '../lib/exportPdf'
+import { fetchSearch, getExportUrl, exportToPDF, truncate } from '../lib'
 import { BarChart3, Search, Download, RefreshCw, Moon, ChevronLeft, X, FileText } from 'lucide-react'
 
 export default function NavBar({ filters, onSearchResult }) {
