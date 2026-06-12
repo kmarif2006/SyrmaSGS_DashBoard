@@ -605,7 +605,7 @@ class TestAPIIntegration:
     def test_grir_items_filter_by_status(self):
         data = self._get("/api/grir/items", {"status": "IR Pending", "limit": 5})
         for item in data["items"]:
-            assert item["status"] == "IR Pending"
+            assert item["status"] in ("IR Pending", "GR Done / IR Pending", "GR Greater Than Invoice")
 
     def test_grir_items_filter_by_risk(self):
         data = self._get("/api/grir/items", {"risk_level": "CRITICAL", "limit": 5})

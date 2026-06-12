@@ -1289,7 +1289,7 @@ export default function GrirDashboard() {
                   </th>
                   <th className="py-4 px-4 text-right cursor-pointer hover:text-slate-200" onClick={() => handleSort('open_val')}>
                     <div className="flex items-center gap-1.5 justify-end">
-                      Open Val <ArrowUpDown size={12} />
+                      Open Value <ArrowUpDown size={12} />
                     </div>
                   </th>
                   <th className="py-4 px-4 text-center cursor-pointer hover:text-slate-200" onClick={() => handleSort('status')}>
@@ -1297,9 +1297,9 @@ export default function GrirDashboard() {
                       Status <ArrowUpDown size={12} />
                     </div>
                   </th>
-                  <th className="py-4 px-4 text-center cursor-pointer hover:text-slate-200" onClick={() => handleSort('risk_score')}>
+                  <th className="py-4 px-4 text-center cursor-pointer hover:text-slate-200" onClick={() => handleSort('open_aging_days')}>
                     <div className="flex items-center gap-1.5 justify-center">
-                      Risk Score <ArrowUpDown size={12} />
+                      Open Aging Days <ArrowUpDown size={12} />
                     </div>
                   </th>
                   <th className="py-4 pr-6 pl-4 text-center">Action</th>
@@ -1339,30 +1339,23 @@ export default function GrirDashboard() {
                             {formatINR(item.net_ir_val)}
                           </td>
                           <td className={`py-4 px-4 text-right font-mono font-black ${
-                            item.open_val < -1 ? 'text-rose-400' : item.open_val > 1 ? 'text-amber-400' : 'text-emerald-400'
+                            item.open_val < -0.01 ? 'text-rose-400' : item.open_val > 0.01 ? 'text-amber-400' : 'text-emerald-400'
                           }`}>
                             {formatINR(item.open_val)}
                           </td>
                           <td className="py-4 px-4 text-center">
                             <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-black tracking-widest uppercase border ${
-                              item.status === 'FULLY RECONCILED' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-                              item.status === 'FULLY REVERSED' ? 'bg-slate-500/10 text-slate-400 border-slate-500/20' :
-                              item.status === 'GR ONLY' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
-                              item.status === 'IR ONLY' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' :
-                              item.status === 'OVER INVOICED' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
-                              item.status === 'PRICE VARIANCE' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+                              item.status === 'Reconciled' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                              item.status === 'GR Done / IR Pending' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                              item.status === 'IR Done / GR Pending' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' :
+                              item.status === 'Invoice Greater Than GR' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+                              item.status === 'GR Greater Than Invoice' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
                             }`}>
                               {item.status}
                             </span>
                           </td>
-                          <td className="py-4 px-4 text-center">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border uppercase ${
-                              item.risk_level === 'CRITICAL' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
-                              item.risk_level === 'HIGH' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' :
-                              item.risk_level === 'MEDIUM' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                            }`}>
-                              {item.risk_score} {item.risk_level}
-                            </span>
+                          <td className="py-4 px-4 text-center font-mono font-bold text-slate-300">
+                            {item.open_aging_days !== undefined && item.open_aging_days !== null && item.open_aging_days !== "" ? `${item.open_aging_days} days` : '--'}
                           </td>
                           <td className="py-4 pr-6 pl-4 text-center">
                             <button className="text-xs text-indigo-400 hover:text-indigo-300 font-bold transition-colors">

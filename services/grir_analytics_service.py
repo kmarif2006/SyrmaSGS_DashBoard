@@ -482,6 +482,35 @@ class GRIRAnalyticsService:
         ]
         existing = [c for c in all_items_cols if c in df.columns]
         all_items = df[existing].copy()
+
+        def compute_expanded_columns(row):
+            op_val = row.get('open_val', 0.0)
+            net_gr = row.get('net_gr_val', 0.0)
+            net_ir = row.get('net_ir_val', 0.0)
+            days_op = row.get('days_open', 0)
+            
+            abs_op = abs(op_val)
+            if abs_op <= 0.01:
+                st = "Reconciled"
+                oad = ""
+            else:
+                oad = int(days_op) if pd.notna(days_op) else ""
+                if net_gr > 0 and net_ir == 0:
+                    st = "GR Done / IR Pending"
+                elif net_ir > 0 and net_gr == 0:
+                    st = "IR Done / GR Pending"
+                elif net_ir > net_gr and net_gr > 0:
+                    st = "Invoice Greater Than GR"
+                elif net_gr > net_ir and net_ir > 0:
+                    st = "GR Greater Than Invoice"
+                else:
+                    st = "Review Required"
+            return pd.Series({'status': st, 'open_aging_days': oad})
+
+        new_cols = all_items.apply(compute_expanded_columns, axis=1)
+        all_items['status'] = new_cols['status']
+        all_items['open_aging_days'] = new_cols['open_aging_days']
+
         all_items['posting_date'] = all_items['posting_date'].apply(
             lambda d: d.strftime('%Y-%m-%d') if pd.notna(d) else '')
         all_items = all_items.fillna('')
@@ -608,7 +637,13 @@ class GRIRAnalyticsService:
             ]
 
         if status:
-            filtered = [item for item in filtered if item.get('status') == status]
+            filtered = [
+                item for item in filtered 
+                if item.get('status') == status or 
+                   (status == "IR Pending" and item.get('status') in ["GR Done / IR Pending", "GR Greater Than Invoice"]) or
+                   (status == "GR Pending" and item.get('status') in ["IR Done / GR Pending", "Invoice Greater Than GR"]) or
+                   (status == "Reconciled" and item.get('status') == "Reconciled")
+            ]
 
         if risk_level:
             filtered = [item for item in filtered if item.get('risk_level') == risk_level]
@@ -619,7 +654,7 @@ class GRIRAnalyticsService:
         if sortBy:
             reverse = (sortOrder == 'desc')
             numeric_fields = ['net_gr_qty', 'net_gr_val', 'net_ir_qty', 'net_ir_val',
-                              'open_qty', 'open_val', 'risk_score', 'days_open',
+                              'open_qty', 'open_val', 'risk_score', 'days_open', 'open_aging_days',
                               'inv_completion_pct', 'reversal_pct', 'price_var_pct', 'price_var_abs']
 
             def get_sort_key(item):
