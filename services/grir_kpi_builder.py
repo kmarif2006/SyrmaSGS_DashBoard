@@ -50,12 +50,12 @@ def build_executive_kpis(reconciled_df):
     kpis['total_open_exposure_inr'] = reconciled_df['Open_Exposure_INR'].sum()
     
     # 9. IR Pending Count and Value
-    kpis['pending_invoice_count'] = (reconciled_df['Status'] == 'IR Pending').sum()
-    kpis['pending_invoice_value_inr'] = reconciled_df[reconciled_df['Status'] == 'IR Pending']['Open_Exposure_INR'].sum()
+    kpis['pending_invoice_count'] = (reconciled_df['Status'].isin(['GR Done / IR Pending', 'GR Greater Than Invoice'])).sum()
+    kpis['pending_invoice_value_inr'] = reconciled_df[reconciled_df['Status'].isin(['GR Done / IR Pending', 'GR Greater Than Invoice'])]['Open_Exposure_INR'].sum()
     
     # 10. GR Pending Count and Value
-    kpis['pending_gr_count'] = (reconciled_df['Status'] == 'GR Pending').sum()
-    kpis['pending_gr_value_inr'] = reconciled_df[reconciled_df['Status'] == 'GR Pending']['Open_Exposure_INR'].sum()
+    kpis['pending_gr_count'] = (reconciled_df['Status'].isin(['IR Done / GR Pending', 'Invoice Greater Than GR'])).sum()
+    kpis['pending_gr_value_inr'] = reconciled_df[reconciled_df['Status'].isin(['IR Done / GR Pending', 'Invoice Greater Than GR'])]['Open_Exposure_INR'].sum()
     
     # 11. Open PO Count
     kpis['open_po_count'] = reconciled_df[reconciled_df['Open_Exposure_INR'] > tolerance]['PO Number'].nunique()
@@ -71,7 +71,7 @@ def build_executive_kpis(reconciled_df):
     kpis['currency_conversion_issues'] = int(reconciled_df['Currency_Conversion_Missing_Count'].sum()) if 'Currency_Conversion_Missing_Count' in reconciled_df.columns else 0
 
     # 15. Average Invoice Delay (days to invoice first GR item)
-    ir_pending = reconciled_df[reconciled_df['Status'] == 'IR Pending']
+    ir_pending = reconciled_df[reconciled_df['Status'].isin(['GR Done / IR Pending', 'GR Greater Than Invoice'])]
     if len(ir_pending) > 0 and 'Days_Open' in ir_pending.columns:
         kpis['average_invoice_delay_days'] = ir_pending['Days_Open'].mean()
     else:
@@ -149,10 +149,15 @@ def build_aging_analysis(reconciled_df):
             'reconciled_items': reconciled_mask.sum(),
             'unreconciled_items': (~reconciled_mask).sum(),
             'total_exposure_inr': round(bucket_data['Open_Exposure_INR'].sum(), 2),
-            'ir_pending_count': (bucket_data['Status'] == 'IR Pending').sum(),
-            'ir_pending_value_inr': round(bucket_data[bucket_data['Status'] == 'IR Pending']['Open_Exposure_INR'].sum(), 2),
-            'gr_pending_count': (bucket_data['Status'] == 'GR Pending').sum(),
-            'gr_pending_value_inr': round(bucket_data[bucket_data['Status'] == 'GR Pending']['Open_Exposure_INR'].sum(), 2),
+            'ir_pending_count': (bucket_data['Status'].isin(['GR Done / IR Pending', 'GR Greater Than Invoice'])).sum(),
+            'ir_pending_value_inr': round(bucket_data[bucket_data['Status'].isin(['GR Done / IR Pending', 'GR Greater Than Invoice'])]['Open_Exposure_INR'].sum(), 2),
+            'gr_pending_count': (bucket_data['Status'].isin(['IR Done / GR Pending', 'Invoice Greater Than GR'])).sum(),
+            'gr_pending_value_inr': round(bucket_data[bucket_data['Status'].isin(['IR Done / GR Pending', 'Invoice Greater Than GR'])]['Open_Exposure_INR'].sum(), 2),
+            'gr_done_ir_pending_val': round(bucket_data[bucket_data['Status'] == 'GR Done / IR Pending']['Open_Exposure_INR'].sum(), 2),
+            'gr_greater_inv_val': round(bucket_data[bucket_data['Status'] == 'GR Greater Than Invoice']['Open_Exposure_INR'].sum(), 2),
+            'ir_done_gr_pending_val': round(bucket_data[bucket_data['Status'] == 'IR Done / GR Pending']['Open_Exposure_INR'].sum(), 2),
+            'inv_greater_gr_val': round(bucket_data[bucket_data['Status'] == 'Invoice Greater Than GR']['Open_Exposure_INR'].sum(), 2),
+            'review_required_val': round(bucket_data[bucket_data['Status'] == 'Review Required']['Open_Exposure_INR'].sum(), 2),
         })
     
     return result
@@ -263,7 +268,7 @@ def build_top_management_insights(reconciled_df):
     # Status summary
     status_summary = {}
     if 'Status' in reconciled_df.columns:
-        for status in ['IR Pending', 'GR Pending', 'Reconciled', 'No Activity']:
+        for status in ['Reconciled', 'GR Done / IR Pending', 'IR Done / GR Pending', 'Invoice Greater Than GR', 'GR Greater Than Invoice', 'Review Required']:
             status_data = reconciled_df[reconciled_df['Status'] == status]
             status_summary[status] = {
                 'count': len(status_data),

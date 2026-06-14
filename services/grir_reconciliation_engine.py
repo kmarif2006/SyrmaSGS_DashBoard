@@ -153,20 +153,25 @@ def aggregate_by_po_item(grir_df, me2n_df, ekko_df, analysis_date=None):
     agg_df['Open_Qty_Exposure'] = agg_df['Open_Qty'].abs()
     
     # Classify status
-    tolerance = 0.01
+    op_val = agg_df['Open_Val_INR']
+    net_gr = agg_df['Net_GR_Val_INR']
+    net_ir = agg_df['Net_IR_Val_INR']
+    
     status_conds = [
-        (agg_df['Net_GR_Val_INR'] == 0) & (agg_df['Net_IR_Val_INR'] == 0),
-        agg_df['Open_Exposure_INR'] <= tolerance,
-        agg_df['Open_Val_INR'] > tolerance,
-        agg_df['Open_Val_INR'] < -tolerance
+        (op_val.abs() <= 0.01),
+        (net_gr > 0) & (net_ir == 0),
+        (net_ir > 0) & (net_gr == 0),
+        (net_ir > net_gr) & (net_gr > 0),
+        (net_gr > net_ir) & (net_ir > 0),
     ]
     status_choices = [
-        'No Activity',
         'Reconciled',
-        'IR Pending',
-        'GR Pending'
+        'GR Done / IR Pending',
+        'IR Done / GR Pending',
+        'Invoice Greater Than GR',
+        'GR Greater Than Invoice',
     ]
-    agg_df['Status'] = np.select(status_conds, status_choices, default='No Activity')
+    agg_df['Status'] = np.select(status_conds, status_choices, default='Review Required')
     
     # Bring in Exchange Rate and Currency from ekko_df to me2n_df first
     ekko_cols_to_merge = ['PO Number', 'Exchange Rate', 'Currency']
@@ -211,8 +216,8 @@ def aggregate_by_po_item(grir_df, me2n_df, ekko_df, analysis_date=None):
         if 'Document Date_EKKO' in agg_df.columns:
             doc_date = pd.to_datetime(agg_df['Document Date_EKKO'])
             
-    cond_ir_pending = agg_df['Status'] == 'IR Pending'
-    cond_gr_pending = agg_df['Status'] == 'GR Pending'
+    cond_ir_pending = agg_df['Status'].isin(['GR Done / IR Pending', 'GR Greater Than Invoice'])
+    cond_gr_pending = agg_df['Status'].isin(['IR Done / GR Pending', 'Invoice Greater Than GR'])
     cond_recon = agg_df['Status'] == 'Reconciled'
     cond_else = ~(cond_ir_pending | cond_gr_pending | cond_recon)
     

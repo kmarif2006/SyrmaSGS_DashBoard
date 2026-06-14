@@ -528,20 +528,25 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
     agg_df['Open_Qty_Exposure'] = agg_df['Open_Qty'].abs()
     
     # Classify status
-    tolerance = RECON_TOLERANCE
+    op_val = agg_df['Open_Val_INR']
+    net_gr = agg_df['Net_GR_Val_INR']
+    net_ir = agg_df['Net_IR_Val_INR']
+    
     status_conds = [
-        (agg_df['Net_GR_Val_INR'] == 0) & (agg_df['Net_IR_Val_INR'] == 0),
-        agg_df['Open_Exposure_INR'] <= tolerance,
-        agg_df['Open_Val_INR'] > tolerance,
-        agg_df['Open_Val_INR'] < -tolerance
+        (op_val.abs() <= 0.01),
+        (net_gr > 0) & (net_ir == 0),
+        (net_ir > 0) & (net_gr == 0),
+        (net_ir > net_gr) & (net_gr > 0),
+        (net_gr > net_ir) & (net_ir > 0),
     ]
     status_choices = [
-        'No Activity',
         'Reconciled',
-        'IR Pending',
-        'GR Pending'
+        'GR Done / IR Pending',
+        'IR Done / GR Pending',
+        'Invoice Greater Than GR',
+        'GR Greater Than Invoice',
     ]
-    agg_df['Status'] = np.select(status_conds, status_choices, default='No Activity')
+    agg_df['Status'] = np.select(status_conds, status_choices, default='Review Required')
     
     # Bring in Exchange Rate and Currency from ekko_df to me2n_df first
     ekko_cols_to_merge = ['PO Number', 'Exchange Rate', 'Currency']
@@ -708,12 +713,23 @@ def build_kpis(df, ekko=None):
     recon_count = (df['Status'] == 'Reconciled').sum()
     recon_rate  = recon_count / total_items * 100 if total_items else 0.0
 
-    status_dist = df['Status'].value_counts().to_dict()
+    status_dist_init = {
+        'Reconciled': 0,
+        'GR Done / IR Pending': 0,
+        'IR Done / GR Pending': 0,
+        'Invoice Greater Than GR': 0,
+        'GR Greater Than Invoice': 0,
+        'Review Required': 0
+    }
+    status_counts = df['Status'].value_counts().to_dict()
+    status_dist_init.update(status_counts)
+    status_dist = status_dist_init
+
     risk_dist   = df['risk_level'].value_counts().to_dict()
 
-    pending_invoice_val = df[df['Status'] == 'IR Pending']['Open_Exposure_INR'].sum()
-    over_inv_val        = df[df['Status'] == 'GR Pending']['Open_Exposure_INR'].sum()
-    ir_only_val         = df[df['Status'] == 'GR Pending']['Open_Exposure_INR'].sum()
+    pending_invoice_val = df[df['Status'].isin(['GR Done / IR Pending', 'GR Greater Than Invoice'])]['Open_Exposure_INR'].sum()
+    over_inv_val        = df[df['Status'].isin(['IR Done / GR Pending', 'Invoice Greater Than GR'])]['Open_Exposure_INR'].sum()
+    ir_only_val         = df[df['Status'] == 'IR Done / GR Pending']['Open_Exposure_INR'].sum()
     total_reversals_val = df['Reversal_Value_INR_PO'].sum() if 'Reversal_Value_INR_PO' in df.columns else 0.0
 
     spend_by_vendor = df.groupby('Vendor')['Net_Order_Value_INR'].sum().sort_values(ascending=False) if 'Vendor' in df.columns and 'Net_Order_Value_INR' in df.columns else pd.Series()
@@ -775,10 +791,11 @@ def build_aging(df):
             'open_count':      int(len(open_sub)),
             'open_value':      round(float(open_sub['exposure_val'].sum()), 2),
             'exposure':        round(float(open_sub['exposure_val'].sum()), 2),
-            'gr_only_val':     round(float(sub[sub['status']=='IR Pending']['open_val'].sum()), 2),
-            'partial_inv_val': 0.0,
-            'over_inv_val':    round(float(sub[sub['status']=='GR Pending']['open_val'].abs().sum()), 2),
-            'ir_only_val':     0.0,
+            'gr_done_ir_pending_val': round(float(sub[sub['status']=='GR Done / IR Pending']['open_val'].abs().sum()), 2),
+            'gr_greater_inv_val': round(float(sub[sub['status']=='GR Greater Than Invoice']['open_val'].abs().sum()), 2),
+            'ir_done_gr_pending_val': round(float(sub[sub['status']=='IR Done / GR Pending']['open_val'].abs().sum()), 2),
+            'inv_greater_gr_val': round(float(sub[sub['status']=='Invoice Greater Than GR']['open_val'].abs().sum()), 2),
+            'review_required_val': round(float(sub[sub['status']=='Review Required']['open_val'].abs().sum()), 2),
         })
     return result
 
@@ -884,13 +901,13 @@ def generate_risk_flags(df, total_open_exposure):
         reasons = []
         rec_action = ""
         
-        if row['status'] == 'OVER INVOICED':
+        if row['status'] == 'Invoice Greater Than GR':
             reasons.append(f"Excess invoicing: Invoice receipt exceeds Goods receipt by {abs(row['open_qty']):.1f} units")
             rec_action = "Block payment immediately, investigate duplicate invoicing or billing error."
-        elif row['status'] == 'IR ONLY':
+        elif row['status'] == 'IR Done / GR Pending':
             reasons.append("Three-way match failure: Invoice receipt posted without goods receipt")
             rec_action = "Block payment until goods receipt is verified and posted."
-        elif row['status'] == 'GR ONLY' and row['days_open'] > 90:
+        elif row['status'] == 'GR Done / IR Pending' and row['days_open'] > 90:
             reasons.append(f"Aged Goods Receipt: Goods received but no invoice posted for {row['days_open']} days")
             rec_action = "Contact supplier to request invoice or clear accrual balance."
             
@@ -1029,8 +1046,8 @@ def build_vendor_insights(df):
             'exception_count':  exc,
             'dominant_status':  str(top_status),
             'risk_level':       str(vdf['risk_level'].mode().iloc[0]) if len(vdf) else 'LOW',
-            'pending_invoice':  round(float(vdf[vdf['status'].isin(['GR ONLY','PARTIALLY INVOICED'])]['open_val'].sum()), 2),
-            'over_invoiced':    round(float(vdf[vdf['status']=='OVER INVOICED']['open_val'].abs().sum()), 2),
+            'pending_invoice':  round(float(vdf[vdf['status'].isin(['GR Done / IR Pending','GR Greater Than Invoice'])]['open_val'].sum()), 2),
+            'over_invoiced':    round(float(vdf[vdf['status'].isin(['IR Done / GR Pending','Invoice Greater Than GR'])]['open_val'].abs().sum()), 2),
         })
     return sorted(vendors, key=lambda x: abs(x['open_value']), reverse=True)[:30]
 
@@ -1397,33 +1414,10 @@ def main():
     existing = [c for c in all_items_cols if c in df.columns]
     all_items = df[existing].copy()
 
-    def compute_expanded_columns(row):
-        op_val = row.get('open_val', 0.0)
-        net_gr = row.get('net_gr_val', 0.0)
-        net_ir = row.get('net_ir_val', 0.0)
-        days_op = row.get('days_open', 0)
-        
-        abs_op = abs(op_val)
-        if abs_op <= 0.01:
-            st = "Reconciled"
-            oad = ""
-        else:
-            oad = int(days_op) if pd.notna(days_op) else ""
-            if net_gr > 0 and net_ir == 0:
-                st = "GR Done / IR Pending"
-            elif net_ir > 0 and net_gr == 0:
-                st = "IR Done / GR Pending"
-            elif net_ir > net_gr and net_gr > 0:
-                st = "Invoice Greater Than GR"
-            elif net_gr > net_ir and net_ir > 0:
-                st = "GR Greater Than Invoice"
-            else:
-                st = "Review Required"
-        return pd.Series({'status': st, 'open_aging_days': oad})
-
-    new_cols = all_items.apply(compute_expanded_columns, axis=1)
-    all_items['status'] = new_cols['status']
-    all_items['open_aging_days'] = new_cols['open_aging_days']
+    all_items['open_aging_days'] = all_items.apply(
+        lambda r: int(r['days_open']) if pd.notna(r['days_open']) and r['status'] != 'Reconciled' else "",
+        axis=1
+    )
 
     all_items['posting_date'] = all_items['posting_date'].apply(
         lambda d: d.strftime('%Y-%m-%d') if pd.notna(d) else '')

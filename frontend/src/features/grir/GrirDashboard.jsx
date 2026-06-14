@@ -41,13 +41,12 @@ import {
 
 // Colors for charts
 const STATUS_COLORS = {
-  'FULLY RECONCILED': '#10b981', // Emerald
-  'FULLY REVERSED': '#64748b',   // Slate
-  'PRICE VARIANCE': '#f59e0b',   // Amber
-  'GR ONLY': '#3b82f6',          // Blue
-  'IR ONLY': '#8b5cf6',          // Violet
-  'PARTIALLY INVOICED': '#06b6d4', // Cyan
-  'OVER INVOICED': '#ef4444',    // Red
+  'Reconciled': '#10b981', // Emerald
+  'GR Done / IR Pending': '#3b82f6', // Blue
+  'IR Done / GR Pending': '#8b5cf6', // Violet
+  'Invoice Greater Than GR': '#ef4444', // Red
+  'GR Greater Than Invoice': '#f59e0b', // Amber
+  'Review Required': '#06b6d4', // Cyan
 }
 
 const RISK_COLORS = {
@@ -325,6 +324,7 @@ export default function GrirDashboard() {
       name: v.vendor.length > 15 ? v.vendor.substring(0, 15) + '...' : v.vendor,
       fullName: v.vendor,
       'Open Exposure': v.open_value,
+      'Absolute Exposure': Math.abs(v.open_value || 0),
       'Pending Invoice': v.pending_invoice,
       'Over Invoiced': v.over_invoiced,
     }))
@@ -333,11 +333,12 @@ export default function GrirDashboard() {
   const agingChartData = useMemo(() => {
     if (!summary?.aging_analysis) return []
     return summary.aging_analysis.map(item => ({
-      name: item.bucket + ' days',
-      'GR ONLY': item.gr_only_val,
-      'PARTIALLY INVOICED': item.partial_inv_val,
-      'OVER INVOICED': item.over_inv_val,
-      'IR ONLY': item.ir_only_val,
+      name: item.aging_bucket || (item.bucket + ' days'),
+      'GR Done / IR Pending': item.gr_done_ir_pending_val || 0,
+      'IR Done / GR Pending': item.ir_done_gr_pending_val || 0,
+      'Invoice Greater Than GR': item.inv_greater_gr_val || 0,
+      'GR Greater Than Invoice': item.gr_greater_inv_val || 0,
+      'Review Required': item.review_required_val || 0,
     }))
   }, [summary])
 
@@ -451,18 +452,18 @@ export default function GrirDashboard() {
         )}
 
         {/* Charts & Analytical Details */}
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <div className="w-full mb-6">
           
           {/* Status Distribution */}
-          <div className="glass-card p-6 flex flex-col xl:col-span-2">
+          <div className="glass-card p-6 flex flex-col w-full">
             <div className="mb-6 flex justify-between items-center">
               <div>
-                <h3 className="text-base font-bold text-slate-100 mb-1">Reconciliation Status Profile</h3>
+                <h3 className="text-base font-bold text-slate-100 mb-1">GR/IR Status Profile</h3>
                 <p className="text-xs text-slate-500 font-bold tracking-wide uppercase">Volume distribution of all PO lines</p>
               </div>
-              <span className="badge bg-slate-800 text-slate-400 font-semibold text-[10px] border border-slate-700">7 Categories</span>
+              <span className="badge bg-slate-800 text-slate-400 font-semibold text-[10px] border border-slate-700">6 Categories</span>
             </div>
-            <div className="flex-1 min-h-[300px]">
+            <div className="w-full h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={statusChartData} layout="vertical" margin={{ left: 50, right: 20 }}>
                   <XAxis type="number" stroke="#475569" className="text-xs" />
@@ -479,51 +480,6 @@ export default function GrirDashboard() {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Risk Level Distribution */}
-          <div className="glass-card p-6 flex flex-col">
-            <div className="mb-6">
-              <h3 className="text-base font-bold text-slate-100 mb-1">Audit Risk Composition</h3>
-              <p className="text-xs text-slate-500 font-bold tracking-wide uppercase">Items by severity band</p>
-            </div>
-            <div className="flex-1 flex flex-col md:flex-row xl:flex-col items-center justify-center gap-6">
-              <div className="w-44 h-44 flex-shrink-0">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={riskChartData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={55}
-                      outerRadius={75}
-                      paddingAngle={4}
-                      dataKey="value"
-                    >
-                      {riskChartData.map((entry, idx) => (
-                        <Cell key={`cell-${idx}`} fill={RISK_COLORS[entry.name] || '#cbd5e1'} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155' }}
-                      itemStyle={{ color: '#f1f5f9', fontSize: '12px' }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-
-              <div className="flex-1 w-full space-y-2.5">
-                {riskChartData.map((item) => (
-                  <div key={item.name} className="flex items-center justify-between text-xs p-2 bg-slate-900/40 rounded-xl border border-slate-800/50">
-                    <div className="flex items-center gap-2">
-                      <span className="w-3.5 h-3.5 rounded-md" style={{ backgroundColor: RISK_COLORS[item.name] }} />
-                      <span className="font-bold text-slate-300 uppercase tracking-wider">{item.name}</span>
-                    </div>
-                    <span className="font-black text-white">{safeLocaleString(item.value)} items</span>
-                  </div>
-                ))}
-              </div>
             </div>
           </div>
         </div>
@@ -726,9 +682,9 @@ export default function GrirDashboard() {
                     contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155' }}
                     labelClassName="text-slate-100 font-bold text-xs"
                     itemClassName="text-xs text-slate-300"
-                    formatter={(val) => [formatINR(val), 'Exposure']}
+                    formatter={(val, name, props) => [formatINR(props.payload['Open Exposure'] || 0), 'Exposure']}
                   />
-                  <Bar dataKey="Open Exposure" radius={[0, 4, 4, 0]} fill="#6366f1" />
+                  <Bar dataKey="Absolute Exposure" radius={[0, 4, 4, 0]} fill="#6366f1" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -751,7 +707,6 @@ export default function GrirDashboard() {
                     <th className="pb-3 px-4 text-right">IR Value</th>
                     <th className="pb-3 px-4 text-right">Open Value</th>
                     <th className="pb-3 px-4 text-center">Status</th>
-                    <th className="pb-3 px-4 text-center">Risk</th>
                     <th className="pb-3 pl-4 text-right">Actions</th>
                   </tr>
                 </thead>
@@ -771,15 +726,14 @@ export default function GrirDashboard() {
                             {formatINR(v.open_value)}
                           </td>
                           <td className="py-3 px-4 text-center">
-                            <span className="badge bg-slate-800 text-[9px] text-slate-300 border border-slate-700 font-bold uppercase tracking-wider">{v.dominant_status}</span>
-                          </td>
-                          <td className="py-3 px-4 text-center font-bold">
-                            <span className={`px-2 py-0.5 rounded text-[9px] border uppercase ${
-                              v.risk_level === 'CRITICAL' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 
-                              v.risk_level === 'HIGH' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : 
-                              v.risk_level === 'MEDIUM' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                            <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-black tracking-widest uppercase border ${
+                              v.dominant_status === 'Reconciled' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                              v.dominant_status === 'GR Done / IR Pending' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                              v.dominant_status === 'IR Done / GR Pending' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' :
+                              v.dominant_status === 'Invoice Greater Than GR' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+                              v.dominant_status === 'GR Greater Than Invoice' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
                             }`}>
-                              {v.risk_level}
+                              {v.dominant_status}
                             </span>
                           </td>
                           <td className="py-3 pl-4 text-right">
@@ -870,11 +824,12 @@ export default function GrirDashboard() {
                           .map(([status, count]) => (
                             <span 
                               key={status} 
-                              className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border ${
-                                status === 'FULLY RECONCILED' ? 'bg-emerald-500/5 text-emerald-400 border-emerald-500/10' :
-                                status === 'GR ONLY' ? 'bg-blue-500/5 text-blue-400 border-blue-500/10' :
-                                status === 'IR ONLY' ? 'bg-purple-500/5 text-purple-400 border-purple-500/10' :
-                                status === 'OVER INVOICED' ? 'bg-red-500/5 text-red-400 border-red-500/10' : 'bg-cyan-500/5 text-cyan-400 border-cyan-500/10'
+                              className={`px-2.5 py-0.5 rounded-full text-[9px] font-black tracking-widest uppercase border ${
+                                status === 'Reconciled' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                                status === 'GR Done / IR Pending' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                                status === 'IR Done / GR Pending' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' :
+                                status === 'Invoice Greater Than GR' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+                                status === 'GR Greater Than Invoice' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
                               }`}
                             >
                               {status}: {count}
@@ -903,11 +858,11 @@ export default function GrirDashboard() {
             <div key={idx} className="glass-card p-4 space-y-1.5 flex flex-col justify-between">
               <div className="space-y-0.5">
                 <span className="text-[10px] text-slate-500 font-black tracking-widest uppercase">Bucket</span>
-                <p className="text-base font-black text-white">{item.bucket} Days</p>
+                <p className="text-base font-black text-white">{item.aging_bucket || item.bucket} Days</p>
               </div>
               <div>
-                <p className="text-sm font-extrabold text-indigo-400">{formatINR(item.open_value)}</p>
-                <p className="text-[10px] text-slate-400">{item.open_count} open items</p>
+                <p className="text-sm font-extrabold text-indigo-400">{formatINR(item.total_exposure_inr || item.open_value)}</p>
+                <p className="text-[10px] text-slate-400">{item.unreconciled_items || item.open_count} open items</p>
               </div>
             </div>
           ))}
@@ -932,10 +887,11 @@ export default function GrirDashboard() {
                     formatter={(val) => [formatINR(val)]}
                   />
                   <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
-                  <Bar dataKey="GR ONLY" stackId="a" fill="#3b82f6" />
-                  <Bar dataKey="PARTIALLY INVOICED" stackId="a" fill="#06b6d4" />
-                  <Bar dataKey="OVER INVOICED" stackId="a" fill="#ef4444" />
-                  <Bar dataKey="IR ONLY" stackId="a" fill="#8b5cf6" />
+                  <Bar dataKey="GR Done / IR Pending" stackId="a" fill="#3b82f6" />
+                  <Bar dataKey="IR Done / GR Pending" stackId="a" fill="#8b5cf6" />
+                  <Bar dataKey="Invoice Greater Than GR" stackId="a" fill="#ef4444" />
+                  <Bar dataKey="GR Greater Than Invoice" stackId="a" fill="#f59e0b" />
+                  <Bar dataKey="Review Required" stackId="a" fill="#64748b" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -953,12 +909,12 @@ export default function GrirDashboard() {
                 {agingData.map((item, idx) => (
                   <div key={idx} className="p-3 bg-slate-900/40 border border-slate-800/60 rounded-xl space-y-1.5">
                     <div className="flex justify-between items-center text-xs">
-                      <strong className="text-slate-200 font-black">{item.bucket} Days</strong>
-                      <span className="text-slate-400 font-mono font-bold">{item.open_count} / {item.total_count} open</span>
+                      <strong className="text-slate-200 font-black">{item.aging_bucket || item.bucket} Days</strong>
+                      <span className="text-slate-400 font-mono font-bold">{item.unreconciled_items || item.open_count} / {item.total_items || item.total_count} open</span>
                     </div>
                     <div className="flex justify-between items-center text-xs">
                       <span className="text-slate-500">Open Value</span>
-                      <span className="font-mono font-black text-indigo-400">{formatINR(item.open_value)}</span>
+                      <span className="font-mono font-black text-indigo-400">{formatINR(item.total_exposure_inr || item.open_value)}</span>
                     </div>
                   </div>
                 ))}

@@ -873,12 +873,12 @@ class GRIRAnalyticsService:
             if aging_data:
                 ag_rows = [[p("Bucket", bold_style), p("Total Items", bold_style),
                             p("Open Items", bold_style), p("Open Value", bold_style),
-                            p("GR Only Val", bold_style), p("IR Only Val", bold_style)]]
+                            p("Pending Invoice Val", bold_style), p("Pending GR Val", bold_style)]]
                 for a in aging_data:
                     ag_rows.append([
-                        p(a.get('bucket', '')), p(str(a.get('total_count', 0))),
-                        p(str(a.get('open_count', 0))), p(fmt_inr(a.get('open_value', 0))),
-                        p(fmt_inr(a.get('gr_only_val', 0))), p(fmt_inr(a.get('ir_only_val', 0))),
+                        p(a.get('aging_bucket', '')), p(str(a.get('total_items', 0))),
+                        p(str(a.get('unreconciled_items', 0))), p(fmt_inr(a.get('total_exposure_inr', 0))),
+                        p(fmt_inr(a.get('gr_done_ir_pending_val', 0))), p(fmt_inr(a.get('ir_done_gr_pending_val', 0))),
                     ])
                 story.append(mk_tbl(ag_rows, [70, 65, 65, 90, 90, 90]))
             story.append(PageBreak())
