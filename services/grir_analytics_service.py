@@ -618,7 +618,7 @@ class GRIRAnalyticsService:
         output = {k: v for k, v in self._output.items() if k != 'all_items'}
         return output
 
-    def get_items(self, page=1, limit=50, search='', status='', risk_level='',
+    def get_items(self, page=1, limit=50, search='', status='', aging_days='',
                   plant='', sortBy='risk_score', sortOrder='desc'):
         if not self._output:
             return {'items': [], 'total': 0, 'page': 1, 'pages': 1, 'limit': limit}
@@ -645,8 +645,15 @@ class GRIRAnalyticsService:
                    (status == "Reconciled" and item.get('status') == "Reconciled")
             ]
 
-        if risk_level:
-            filtered = [item for item in filtered if item.get('risk_level') == risk_level]
+        if aging_days:
+            if aging_days == "<30":
+                filtered = [item for item in filtered if item.get('days_open', 0) < 30]
+            elif aging_days == "30-60":
+                filtered = [item for item in filtered if 30 <= item.get('days_open', 0) <= 60]
+            elif aging_days == "60-90":
+                filtered = [item for item in filtered if 60 < item.get('days_open', 0) <= 90]
+            elif aging_days == ">90":
+                filtered = [item for item in filtered if item.get('days_open', 0) > 90]
 
         if plant:
             filtered = [item for item in filtered if str(item.get('Plant', '')) == plant]

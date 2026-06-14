@@ -213,7 +213,7 @@ export default function GrirDashboard() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  const [riskFilter, setRiskFilter] = useState('')
+  const [agingDaysFilter, setAgingDaysFilter] = useState('')
   const [plantFilter, setPlantFilter] = useState('')
   const [sortBy, setSortBy] = useState('risk_score')
   const [sortOrder, setSortOrder] = useState('desc')
@@ -227,11 +227,11 @@ export default function GrirDashboard() {
     limit,
     search,
     status: statusFilter,
-    risk_level: riskFilter,
+    aging_days: agingDaysFilter,
     plant: plantFilter,
     sortBy,
     sortOrder
-  }), [page, limit, search, statusFilter, riskFilter, plantFilter, sortBy, sortOrder])
+  }), [page, limit, search, statusFilter, agingDaysFilter, plantFilter, sortBy, sortOrder])
 
   const { data: itemsData, isLoading: isItemsLoading } = useGrirItems(itemsParams)
 
@@ -291,11 +291,10 @@ export default function GrirDashboard() {
     }))
   }
 
-  // Reset filters
   const resetFilters = () => {
     setSearch('')
     setStatusFilter('')
-    setRiskFilter('')
+    setAgingDaysFilter('')
     setPlantFilter('')
     setPage(1)
   }
@@ -1159,29 +1158,28 @@ export default function GrirDashboard() {
               className="bg-transparent text-xs text-slate-300 outline-none w-full border-none cursor-pointer"
             >
               <option value="" className="bg-slate-900">All Statuses</option>
-              <option value="FULLY RECONCILED" className="bg-slate-900">FULLY RECONCILED</option>
-              <option value="FULLY REVERSED" className="bg-slate-900">FULLY REVERSED</option>
-              <option value="PRICE VARIANCE" className="bg-slate-900">PRICE VARIANCE</option>
-              <option value="GR ONLY" className="bg-slate-900">GR ONLY</option>
-              <option value="IR ONLY" className="bg-slate-900">IR ONLY</option>
-              <option value="PARTIALLY INVOICED" className="bg-slate-900">PARTIALLY INVOICED</option>
-              <option value="OVER INVOICED" className="bg-slate-900">OVER INVOICED</option>
+              <option value="Reconciled" className="bg-slate-900">Reconciled</option>
+              <option value="GR Done / IR Pending" className="bg-slate-900">GR Done / IR Pending</option>
+              <option value="IR Done / GR Pending" className="bg-slate-900">IR Done / GR Pending</option>
+              <option value="Invoice Greater Than GR" className="bg-slate-900">Invoice Greater Than GR</option>
+              <option value="GR Greater Than Invoice" className="bg-slate-900">GR Greater Than Invoice</option>
+              <option value="Review Required" className="bg-slate-900">Review Required</option>
             </select>
           </div>
 
-          {/* Risk Filter */}
+          {/* Aging Days Filter */}
           <div className="flex items-center gap-2 bg-slate-950/80 border border-slate-850 px-3 py-2 rounded-xl">
-            <ShieldAlert size={14} className="text-slate-500" />
+            <Clock size={14} className="text-slate-500" />
             <select 
-              value={riskFilter} 
-              onChange={e => { setRiskFilter(e.target.value); setPage(1) }}
+              value={agingDaysFilter} 
+              onChange={e => { setAgingDaysFilter(e.target.value); setPage(1) }}
               className="bg-transparent text-xs text-slate-300 outline-none w-full border-none cursor-pointer"
             >
-              <option value="" className="bg-slate-900">All Risks</option>
-              <option value="CRITICAL" className="bg-slate-900 font-bold text-red-400">CRITICAL</option>
-              <option value="HIGH" className="bg-slate-900 text-orange-400">HIGH</option>
-              <option value="MEDIUM" className="bg-slate-900 text-yellow-400">MEDIUM</option>
-              <option value="LOW" className="bg-slate-900 text-emerald-400">LOW</option>
+              <option value="" className="bg-slate-900">All Aging Days</option>
+              <option value="<30" className="bg-slate-900">{'< 30 Days'}</option>
+              <option value="30-60" className="bg-slate-900">30 - 60 Days</option>
+              <option value="60-90" className="bg-slate-900">60 - 90 Days</option>
+              <option value=">90" className="bg-slate-900">{'> 90 Days'}</option>
             </select>
           </div>
 

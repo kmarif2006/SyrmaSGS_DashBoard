@@ -533,6 +533,7 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
     net_ir = agg_df['Net_IR_Val_INR']
     
     status_conds = [
+        ((agg_df['Net_GR_Qty'].abs() < 0.01) & (agg_df['Net_IR_Qty'].abs() < 0.01)) | ((net_gr.abs() < 0.01) & (net_ir.abs() < 0.01)),
         (op_val.abs() <= 0.01),
         (net_gr > 0) & (net_ir == 0),
         (net_ir > 0) & (net_gr == 0),
@@ -540,6 +541,7 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
         (net_gr > net_ir) & (net_ir > 0),
     ]
     status_choices = [
+        'No Activity',
         'Reconciled',
         'GR Done / IR Pending',
         'IR Done / GR Pending',
