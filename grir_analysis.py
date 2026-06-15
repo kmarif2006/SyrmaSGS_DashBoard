@@ -479,9 +479,10 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
     grir_df['Currency_Conversion_Missing'] = (~(conds[0] | conds[1] | conds[2])) & ((Amt_FC != 0) | (Amt_LC != 0))
     
     # Apply S/H sign
-    qty = pd.to_numeric(grir_df['Quantity'], errors='coerce').fillna(0.0)
-    grir_df['Signed_Qty'] = np.where(grir_df['Dr/Cr Ind'] == 'H', -qty, qty)
-    grir_df['Signed_Amount_INR'] = np.where(grir_df['Dr/Cr Ind'] == 'H', -grir_df['Normalized_Amount_INR'], grir_df['Normalized_Amount_INR'])
+    qty_abs = pd.to_numeric(grir_df['Quantity'], errors='coerce').fillna(0.0).abs()
+    amt_abs = grir_df['Normalized_Amount_INR'].abs()
+    grir_df['Signed_Qty'] = np.where(grir_df['Dr/Cr Ind'] == 'H', -qty_abs, qty_abs)
+    grir_df['Signed_Amount_INR'] = np.where(grir_df['Dr/Cr Ind'] == 'H', -amt_abs, amt_abs)
     
     # Split GR and IR
     grir_df['GR_Value_INR'] = np.where(grir_df['Trans Type'] == '1', grir_df['Signed_Amount_INR'], 0.0)
@@ -498,8 +499,23 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
     
     grir_df['is_gr'] = (grir_df['Trans Type'] == '1')
     grir_df['is_ir'] = (grir_df['Trans Type'] == '2')
-    grir_df['is_reversal'] = (grir_df['Dr/Cr Ind'] == 'H')
-    grir_df['reversal_val'] = np.where(grir_df['Dr/Cr Ind'] == 'H', grir_df['Normalized_Amount_INR'], 0.0)
+    
+    trans_type = grir_df['Trans Type'].astype(str).str.strip()
+    drcr = grir_df['Dr/Cr Ind'].astype(str).str.strip()
+    amount = pd.to_numeric(grir_df['Normalized_Amount_INR'], errors='coerce').fillna(0.0).abs()
+    qty = pd.to_numeric(grir_df['Quantity'], errors='coerce').fillna(0.0).abs()
+
+    gr_reversal_mask = trans_type.eq('1') & drcr.eq('H')
+    ir_reversal_mask = trans_type.eq('2') & drcr.eq('H')
+    true_reversal_mask = gr_reversal_mask | ir_reversal_mask
+
+    grir_df['is_reversal'] = true_reversal_mask
+    grir_df['gr_reversal_qty'] = np.where(gr_reversal_mask, qty, 0.0)
+    grir_df['gr_reversal_val'] = np.where(gr_reversal_mask, amount, 0.0)
+    grir_df['ir_reversal_qty'] = np.where(ir_reversal_mask, qty, 0.0)
+    grir_df['ir_reversal_val'] = np.where(ir_reversal_mask, amount, 0.0)
+    grir_df['reversal_qty'] = np.where(true_reversal_mask, qty, 0.0)
+    grir_df['reversal_val'] = np.where(true_reversal_mask, amount, 0.0)
     
     # Aggregate by PO Number + PO Item
     agg_df = grir_df.groupby(['PO Number', 'PO Item']).agg(
@@ -515,6 +531,11 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
         Last_IR_Date=('IR_Date', 'max'),
         Reversal_Count_PO=('is_reversal', 'sum'),
         Reversal_Value_INR_PO=('reversal_val', 'sum'),
+        Reversal_Qty_PO=('reversal_qty', 'sum'),
+        GR_Reversal_Qty_PO=('gr_reversal_qty', 'sum'),
+        GR_Reversal_Val_PO=('gr_reversal_val', 'sum'),
+        IR_Reversal_Qty_PO=('ir_reversal_qty', 'sum'),
+        IR_Reversal_Val_PO=('ir_reversal_val', 'sum'),
         Currency_Conversion_Missing_Count=('Currency_Conversion_Missing', 'sum')
     ).reset_index()
     
@@ -632,13 +653,13 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
     agg_df['material_label'] = agg_df['material_label'].str.strip(' -')
     
     # Reversal info (Legacy compatibility)
-    agg_df['ir_reversal_qty'] = 0.0
-    agg_df['ir_reversal_val'] = 0.0
-    agg_df['gr_reversal_qty'] = 0.0
-    agg_df['gr_reversal_val'] = 0.0
-    agg_df['reversal_pct'] = 0.0
-    agg_df['ir_reversal_val'] = agg_df['Reversal_Value_INR_PO']
-    agg_df['reversal_pct'] = np.where(agg_df['Net_IR_Qty'] != 0, (agg_df['Reversal_Value_INR_PO'] / agg_df['Net_IR_Qty']).clip(0, 100), 0.0)
+    agg_df['ir_reversal_qty'] = agg_df.get('IR_Reversal_Qty_PO', 0.0)
+    agg_df['ir_reversal_val'] = agg_df.get('IR_Reversal_Val_PO', 0.0)
+    agg_df['gr_reversal_qty'] = agg_df.get('GR_Reversal_Qty_PO', 0.0)
+    agg_df['gr_reversal_val'] = agg_df.get('GR_Reversal_Val_PO', 0.0)
+    
+    ir_qty_abs = agg_df['Net_IR_Qty'].abs()
+    agg_df['reversal_pct'] = np.where(ir_qty_abs > 0, (agg_df['ir_reversal_qty'] / ir_qty_abs * 100).fillna(0.0).clip(0, 100), 0.0)
 
     # Invoice completion percentage
     agg_df['inv_completion_pct'] = np.where(
@@ -1178,7 +1199,7 @@ def build_price_variance(df):
 
 
 def build_reversal_analysis(df):
-    rev = df[df['reversal_pct'] > 0].sort_values('reversal_pct', ascending=False)
+    rev = df[df['reversal_pct'] > 0].sort_values(['reversal_pct', 'Reversal_Value_INR_PO', 'open_val'], ascending=[False, False, False])
     result = []
     for row in rev.head(25).to_dict('records'):
         result.append({
@@ -1186,9 +1207,11 @@ def build_reversal_analysis(df):
             'po_item':        str(row['PO Item']),
             'vendor':         str(row['Vendor'])[:60],
             'material':       str(row['Short Text'])[:60],
+            'gr_qty':         round(float(row['net_gr_qty']), 2),
             'ir_qty':         round(float(row['net_ir_qty']), 2),
-            'reversal_qty':   round(float(row['ir_reversal_qty']), 2),
-            'reversal_val':   round(float(row['ir_reversal_val']), 2),
+            'gr_reversal_qty': abs(round(float(row['gr_reversal_qty']), 2)),
+            'ir_reversal_qty': abs(round(float(row['ir_reversal_qty']), 2)),
+            'reversal_val':   abs(round(float(row['gr_reversal_val'] + row['ir_reversal_val']), 2)),
             'reversal_pct':   round(float(row['reversal_pct']), 1),
             'open_val':       round(float(row['open_val']), 2),
             'status':         str(row['status']),
@@ -1198,7 +1221,7 @@ def build_reversal_analysis(df):
 
 def build_exceptions(df):
     exc_df = df[~df['reconciled'] & (df['status'] != 'FULLY REVERSED')].copy()
-    exc_df = exc_df.sort_values(['risk_score','open_val'], ascending=[False, True]).head(30)
+    exc_df = exc_df.sort_values(['price_var_abs','open_val'], ascending=[False, True]).head(30)
 
     result = []
     for row in exc_df.to_dict('records'):

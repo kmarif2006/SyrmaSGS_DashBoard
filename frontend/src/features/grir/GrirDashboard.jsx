@@ -131,11 +131,11 @@ function GrirUploadZone({ onUploadSuccess }) {
     <div className="glass-card p-5 border border-slate-800/60">
       <div className="flex flex-col lg:flex-row gap-5 items-start lg:items-center">
         {/* Drop Zone */}
-        <div
+        <label
+          htmlFor="file-upload"
           onDragOver={e => { e.preventDefault(); setDragging(true) }}
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
-          onClick={() => !uploading && inputRef.current?.click()}
           className={`flex-shrink-0 w-full lg:w-72 flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 border-dashed transition-all cursor-pointer ${
             dragging
               ? 'border-indigo-500 bg-indigo-500/5 scale-[1.01]'
@@ -144,7 +144,7 @@ function GrirUploadZone({ onUploadSuccess }) {
               : 'border-slate-700/50 hover:border-indigo-500/40 hover:bg-indigo-500/3'
           }`}
         >
-          <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={onInputChange} />
+          <input id="file-upload" ref={inputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={onInputChange} aria-label="Upload dataset file" />
           <div className={`p-3 rounded-xl border transition-colors ${
             uploading ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400' : 'bg-slate-800 border-slate-700 text-slate-400'
           }`}>
@@ -163,7 +163,7 @@ function GrirUploadZone({ onUploadSuccess }) {
               <p className="text-[10px] text-slate-500 text-center">or click to browse · CSV, XLS, XLSX</p>
             </>
           )}
-        </div>
+        </label>
 
         {/* Metadata Panel */}
         <div className="flex-1 space-y-2">
@@ -579,7 +579,7 @@ export default function GrirDashboard() {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-100 mb-0.5">Top 30 Critical Audit Anomalies</h3>
-                  <p className="text-xs text-slate-500 font-bold tracking-wide uppercase">Ranked by risk score and value severity</p>
+                  <p className="text-xs text-slate-500 font-bold tracking-wide uppercase">Ranked by variance and open value severity</p>
                 </div>
               </div>
             </div>
@@ -593,7 +593,6 @@ export default function GrirDashboard() {
                     <th className="pb-3 px-4">Material Text</th>
                     <th className="pb-3 px-4 text-center">Status</th>
                     <th className="pb-3 px-4 text-right">Open Value</th>
-                    <th className="pb-3 px-4 text-center">Risk</th>
                     <th className="pb-3 pl-4">Audit Exception Narrative</th>
                   </tr>
                 </thead>
@@ -617,13 +616,6 @@ export default function GrirDashboard() {
                       </td>
                       <td className={`py-3.5 px-4 text-right font-bold font-mono ${item.open_val < 0 ? 'text-red-400' : 'text-slate-300'}`}>
                         {formatINR(item.open_val)}
-                      </td>
-                      <td className="py-3.5 px-4 text-center font-bold">
-                        <span className={`px-2 py-0.5 rounded text-[9px] border uppercase ${
-                          item.risk_level === 'CRITICAL' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-orange-500/10 text-orange-400 border-orange-500/20'
-                        }`}>
-                          {item.risk_score} {item.risk_level}
-                        </span>
                       </td>
                       <td className="py-3.5 pl-4 text-slate-400 leading-normal italic text-[11px] max-w-[320px]">
                         {item.explanation}
@@ -975,8 +967,10 @@ export default function GrirDashboard() {
                   <th className="pb-3 pr-4">PO Doc / Item</th>
                   <th className="pb-3 px-4">Vendor</th>
                   <th className="pb-3 px-4">Material Name</th>
+                  <th className="pb-3 px-4 text-center">Net GR Qty</th>
                   <th className="pb-3 px-4 text-center">Net IR Qty</th>
-                  <th className="pb-3 px-4 text-center">Reversal Qty</th>
+                  <th className="pb-3 px-4 text-center">GR Rev Qty</th>
+                  <th className="pb-3 px-4 text-center">IR Rev Qty</th>
                   <th className="pb-3 px-4 text-right">Reversal Value</th>
                   <th className="pb-3 px-4 text-center">Reversal %</th>
                   <th className="pb-3 px-4 text-right">Open Value</th>
@@ -986,7 +980,7 @@ export default function GrirDashboard() {
               <tbody className="divide-y divide-slate-800/50 text-slate-300 font-medium">
                 {reversals.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-8 text-center text-slate-500 font-bold">No active reversal records detected.</td>
+                    <td colSpan={10} className="py-8 text-center text-slate-500 font-bold">No active reversal records detected.</td>
                   </tr>
                 ) : (
                   reversals.map((r, idx) => (
@@ -996,9 +990,11 @@ export default function GrirDashboard() {
                       </td>
                       <td className="py-3.5 px-4 text-slate-300 truncate max-w-[120px]" title={r.vendor}>{r.vendor}</td>
                       <td className="py-3.5 px-4 text-slate-400 truncate max-w-[150px]" title={r.material}>{r.material}</td>
+                      <td className="py-3.5 px-4 text-center font-mono">{r.gr_qty}</td>
                       <td className="py-3.5 px-4 text-center font-mono">{r.ir_qty}</td>
-                      <td className="py-3.5 px-4 text-center font-mono text-amber-400 font-bold">{r.reversal_qty}</td>
-                      <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-400">{formatINR(r.reversal_val)}</td>
+                      <td className={`py-3.5 px-4 text-center font-mono font-bold ${r.gr_reversal_qty > 0 ? 'text-amber-400' : 'text-slate-500'}`}>{r.gr_reversal_qty}</td>
+                      <td className={`py-3.5 px-4 text-center font-mono font-bold ${r.ir_reversal_qty > 0 ? 'text-amber-400' : 'text-slate-500'}`}>{r.ir_reversal_qty}</td>
+                      <td className={`py-3.5 px-4 text-right font-mono font-bold ${r.reversal_val > 0 ? 'text-amber-400' : 'text-slate-400'}`}>{formatINR(r.reversal_val)}</td>
                       <td className="py-3.5 px-4 text-center">
                         <span className="px-2 py-0.5 rounded text-[10px] font-black font-mono bg-red-500/10 text-red-400 border border-red-500/20">
                           {formatPct(r.reversal_pct)}
@@ -1147,6 +1143,9 @@ export default function GrirDashboard() {
             <Search size={14} className="text-slate-500" />
             <input 
               type="text" 
+              name="search"
+              autoComplete="off"
+              aria-label="Search PO, Vendor, or Material"
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1) }}
               placeholder="Search PO / Vendor / Material..."
@@ -1216,47 +1215,47 @@ export default function GrirDashboard() {
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-slate-800 text-slate-500 font-bold uppercase tracking-wider bg-slate-900/50">
-                  <th className="py-4 pl-6 pr-4 cursor-pointer hover:text-slate-200" onClick={() => handleSort('PO Number')}>
+                  <th className="py-4 pl-6 pr-4 cursor-pointer hover:text-slate-200 focus-visible:outline-indigo-500" tabIndex={0} onClick={() => handleSort('PO Number')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('PO Number'); } }}>
                     <div className="flex items-center gap-1.5">
                       PO Doc / Item <ArrowUpDown size={12} />
                     </div>
                   </th>
-                  <th className="py-4 px-4 cursor-pointer hover:text-slate-200" onClick={() => handleSort('Vendor')}>
+                  <th className="py-4 px-4 cursor-pointer hover:text-slate-200 focus-visible:outline-indigo-500" tabIndex={0} onClick={() => handleSort('Vendor')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('Vendor'); } }}>
                     <div className="flex items-center gap-1.5">
                       Vendor <ArrowUpDown size={12} />
                     </div>
                   </th>
-                  <th className="py-4 px-4 cursor-pointer hover:text-slate-200" onClick={() => handleSort('Short Text')}>
+                  <th className="py-4 px-4 cursor-pointer hover:text-slate-200 focus-visible:outline-indigo-500" tabIndex={0} onClick={() => handleSort('Short Text')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('Short Text'); } }}>
                     <div className="flex items-center gap-1.5">
                       Short Text <ArrowUpDown size={12} />
                     </div>
                   </th>
-                  <th className="py-4 px-4 text-center cursor-pointer hover:text-slate-200" onClick={() => handleSort('Plant')}>
+                  <th className="py-4 px-4 text-center cursor-pointer hover:text-slate-200 focus-visible:outline-indigo-500" tabIndex={0} onClick={() => handleSort('Plant')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('Plant'); } }}>
                     <div className="flex items-center gap-1.5 justify-center">
                       Plant <ArrowUpDown size={12} />
                     </div>
                   </th>
-                  <th className="py-4 px-4 text-right cursor-pointer hover:text-slate-200" onClick={() => handleSort('net_gr_val')}>
+                  <th className="py-4 px-4 text-right cursor-pointer hover:text-slate-200 focus-visible:outline-indigo-500" tabIndex={0} onClick={() => handleSort('net_gr_val')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('net_gr_val'); } }}>
                     <div className="flex items-center gap-1.5 justify-end">
                       Net GR <ArrowUpDown size={12} />
                     </div>
                   </th>
-                  <th className="py-4 px-4 text-right cursor-pointer hover:text-slate-200" onClick={() => handleSort('net_ir_val')}>
+                  <th className="py-4 px-4 text-right cursor-pointer hover:text-slate-200 focus-visible:outline-indigo-500" tabIndex={0} onClick={() => handleSort('net_ir_val')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('net_ir_val'); } }}>
                     <div className="flex items-center gap-1.5 justify-end">
                       Net IR <ArrowUpDown size={12} />
                     </div>
                   </th>
-                  <th className="py-4 px-4 text-right cursor-pointer hover:text-slate-200" onClick={() => handleSort('open_val')}>
+                  <th className="py-4 px-4 text-right cursor-pointer hover:text-slate-200 focus-visible:outline-indigo-500" tabIndex={0} onClick={() => handleSort('open_val')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('open_val'); } }}>
                     <div className="flex items-center gap-1.5 justify-end">
                       Open Value <ArrowUpDown size={12} />
                     </div>
                   </th>
-                  <th className="py-4 px-4 text-center cursor-pointer hover:text-slate-200" onClick={() => handleSort('status')}>
+                  <th className="py-4 px-4 text-center cursor-pointer hover:text-slate-200 focus-visible:outline-indigo-500" tabIndex={0} onClick={() => handleSort('status')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('status'); } }}>
                     <div className="flex items-center gap-1.5 justify-center">
                       Status <ArrowUpDown size={12} />
                     </div>
                   </th>
-                  <th className="py-4 px-4 text-center cursor-pointer hover:text-slate-200" onClick={() => handleSort('open_aging_days')}>
+                  <th className="py-4 px-4 text-center cursor-pointer hover:text-slate-200 focus-visible:outline-indigo-500" tabIndex={0} onClick={() => handleSort('open_aging_days')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('open_aging_days'); } }}>
                     <div className="flex items-center gap-1.5 justify-center">
                       Open Aging Days <ArrowUpDown size={12} />
                     </div>
@@ -1280,10 +1279,12 @@ export default function GrirDashboard() {
                       <>
                         <tr 
                           key={rowKey}
+                          tabIndex={0}
                           className={`hover:bg-slate-900/40 transition-colors cursor-pointer border-l-2 ${
                             isExpanded ? 'bg-slate-900/50 border-l-indigo-500' : 'border-l-transparent'
                           }`}
                           onClick={() => toggleRow(rowKey)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRow(rowKey); } }}
                         >
                           <td className="py-4 pl-6 pr-4 font-mono font-bold text-slate-100">
                             {item['PO Number']} / {item['PO Item']}
