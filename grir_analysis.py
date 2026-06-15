@@ -219,10 +219,8 @@ def clean_me2n(me2n):
     elif 'Supplier/Supplying Plant' in me2n.columns:
         me2n['Vendor'] = me2n['Supplier/Supplying Plant']
     else:
-        me2n['Vendor'] = ''
-
-    # Clean vendor name
-    me2n['Vendor'] = me2n['Vendor'].apply(lambda v: re.sub(r'^\d+\s+', '', str(v)).strip() if pd.notna(v) else '')
+        me2n = me2n.rename(columns={'Name 1': 'Vendor'})
+    me2n['Vendor'] = me2n['Vendor'].fillna('').astype(str).str.replace(r'^\d+\s+', '', regex=True).str.strip()
 
     me2n['Short Text'] = me2n['Short Text'].astype(str).str.strip()
     me2n['Material']   = me2n['Material'].astype(str).str.strip()
@@ -246,16 +244,15 @@ def clean_ekko(ekko, strict=True):
         ekko['Company Code'] = ''
     if 'Currency' not in ekko.columns:
         ekko['Currency'] = 'INR'
-    if 'Exchange Rate' not in ekko.columns:
-        ekko['Exchange Rate'] = 1.0
     if 'Purchasing Doc. Type' not in ekko.columns:
         ekko['Purchasing Doc. Type'] = ''
     
     ekko['Purchasing Document'] = ekko['Purchasing Document'].astype(str).str.strip()
     ekko['Company Code']        = ekko['Company Code'].astype(str).str.strip()
-    ekko['Currency']            = ekko['Currency'].astype(str).str.strip().fillna('INR')
-    ekko['Exchange Rate']       = pd.to_numeric(ekko['Exchange Rate'], errors='coerce').fillna(1.0)
-    ekko['Exchange Rate']       = ekko['Exchange Rate'].apply(lambda x: 1.0 if x <= 0 else x)
+    ekko['Currency']            = ekko['Currency'].astype(str).str.strip()
+    if 'Exchange Rate' in ekko.columns:
+        ekko['Exchange Rate'] = pd.to_numeric(ekko['Exchange Rate'], errors='coerce').fillna(1.0)
+        ekko['Exchange Rate'] = np.where(ekko['Exchange Rate'] <= 0, 1.0, ekko['Exchange Rate'])
     return ekko
 
 
@@ -611,7 +608,9 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
     agg_df['Days_Open'] = agg_df['Days_Open'].fillna(0).astype(int)
     
     # Classify into aging bucket
-    agg_df['Aging_Bucket'] = agg_df['Days_Open'].apply(aging_bucket)
+    _bins = [-np.inf, 30, 60, 90, 180, 365, np.inf]
+    _labels = ['0-30', '31-60', '61-90', '91-180', '181-365', '365+']
+    agg_df['Aging_Bucket'] = pd.cut(agg_df['Days_Open'].fillna(9999), bins=_bins, labels=_labels).astype(str)
     
     # Keep legacy/expected column names for compatibility
     agg_df['net_gr_qty'] = agg_df['Net_GR_Qty']
@@ -683,18 +682,42 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
         agg_df['Exchange Rate'] = 1.0
 
     # Risk scoring (Legacy compatibility using 0-100 scale)
-    risk_results = agg_df.apply(
-        lambda r: compute_risk(
-            r['Status'],
-            r['Open_Val_INR'],
-            r['Aging_Bucket'],
-            r['reversal_pct'],
-            r['price_var_pct']
-        ),
-        axis=1
+    _status = agg_df['Status'].fillna('')
+    _av = agg_df['Open_Val_INR'].abs()
+    _bucket = agg_df['Aging_Bucket'].fillna('')
+    _pv_pct = agg_df['price_var_pct'].abs()
+    _rev_pct = agg_df['reversal_pct']
+
+    status_map = {
+        'FULLY RECONCILED': 0, 'FULLY REVERSED': 0, 'CLOSED': 0,
+        'PARTIALLY REVERSED': 15, 'PARTIALLY INVOICED': 25,
+        'GR ONLY': 40, 'IR ONLY': 55, 'PRICE VARIANCE': 35,
+        'OVER INVOICED': 65, 'CRITICAL EXCEPTION': 85,
+    }
+    _score = _status.map(status_map).fillna(20)
+
+    _score += np.select(
+        [_av > 5000000, _av > 1000000, _av > 500000, _av > 100000],
+        [30, 20, 12, 6],
+        default=0
     )
-    agg_df['risk_score'] = [x[0] for x in risk_results]
-    agg_df['risk_level'] = [x[1] for x in risk_results]
+
+    age_map = {'0-30': 0, '31-60': 5, '61-90': 12, '91-180': 20, '181-365': 30, '365+': 40}
+    _score += _bucket.map(age_map).fillna(0)
+
+    _score += np.select([_pv_pct > 20, _pv_pct > 10], [15, 8], default=0)
+    _score += np.where(_rev_pct > 50, 10, 0)
+
+    _score = np.clip(_score, 0, 100)
+    
+    _level = np.select(
+        [_score >= 70, _score >= 50, _score >= 30],
+        ['CRITICAL', 'HIGH', 'MEDIUM'],
+        default='LOW'
+    )
+
+    agg_df['risk_score'] = _score
+    agg_df['risk_level'] = _level
         
     print(f"  Reconciliation complete: {len(agg_df):,} PO line items")
     return agg_df
@@ -744,6 +767,14 @@ def build_kpis(df, ekko=None):
     elif 'EKKO_Company_Code' in df.columns:
         company_codes = sorted(df['EKKO_Company_Code'].dropna().astype(str).unique().tolist())
 
+    actionable_mask = (
+        ((df['days_open'] > 90) & (~df['Status'].isin(['Reconciled', 'No Activity']))) 
+        | 
+        (df['Status'] == 'Invoice Greater Than GR')
+    )
+    actionable_exceptions_count = int(actionable_mask.sum())
+    actionable_exceptions_val = round(float(df.loc[actionable_mask, 'exposure_val'].sum()), 2)
+
     return {
         'total_po_items':        int(total_items),
         'total_gr_value':        round(float(total_gr_val), 2),
@@ -756,6 +787,8 @@ def build_kpis(df, ekko=None):
         'matched_lines':         int(recon_count),
         'unmatched_lines':       int(total_items - recon_count),
         'open_item_count':       int(total_items - recon_count),
+        'actionable_exceptions_count': actionable_exceptions_count,
+        'actionable_exceptions_val': actionable_exceptions_val,
         'critical_items':        int((df['risk_level'] == 'CRITICAL').sum()),
         'high_risk_items':       int((df['risk_level'] == 'HIGH').sum()),
         'medium_risk_items':     int((df['risk_level'] == 'MEDIUM').sum()),
@@ -891,7 +924,7 @@ def generate_risk_flags(df, total_open_exposure):
     total_exposure = max(total_open_exposure, 1.0)
     high_crit_df = df[df['risk_level'].isin(['HIGH', 'CRITICAL'])]
     
-    for _, row in high_crit_df.iterrows():
+    for row in high_crit_df.to_dict('records'):
         line_exposure = abs(row['open_val'])
         exp_pct = line_exposure / total_exposure * 100
         
@@ -1128,7 +1161,7 @@ def build_price_variance(df):
     pv = df[abs(df['price_var_pct']) > 5].copy()
     pv = pv.sort_values('price_var_pct', key=abs, ascending=False)
     result = []
-    for _, row in pv.head(25).iterrows():
+    for row in pv.head(25).to_dict('records'):
         result.append({
             'po_number':  str(row['PO Number']),
             'po_item':    str(row['PO Item']),
@@ -1147,7 +1180,7 @@ def build_price_variance(df):
 def build_reversal_analysis(df):
     rev = df[df['reversal_pct'] > 0].sort_values('reversal_pct', ascending=False)
     result = []
-    for _, row in rev.head(25).iterrows():
+    for row in rev.head(25).to_dict('records'):
         result.append({
             'po_number':      str(row['PO Number']),
             'po_item':        str(row['PO Item']),
@@ -1168,7 +1201,7 @@ def build_exceptions(df):
     exc_df = exc_df.sort_values(['risk_score','open_val'], ascending=[False, True]).head(30)
 
     result = []
-    for _, row in exc_df.iterrows():
+    for row in exc_df.to_dict('records'):
         result.append({
             'po_number':    str(row['PO Number']),
             'po_item':      str(row['PO Item']),
@@ -1248,22 +1281,22 @@ def build_executive_summary(df, kpis, analysis_date=None):
     total_items= kpis['total_po_items']
     open_items = kpis['open_item_count']
     recon_rate = kpis['reconciliation_rate']
-    crit       = kpis['critical_items']
+    actionable = kpis.get('actionable_exceptions_count', 0)
 
-    gr_only_pct = (df[df['status']=='GR ONLY']['open_val'].sum() / open_val * 100) if open_val else 0
-    partial_pct = (df[df['status']=='PARTIALLY INVOICED']['open_val'].sum() / open_val * 100) if open_val else 0
-    over_inv_pct= (df[df['status']=='OVER INVOICED']['open_val'].abs().sum() / abs(open_val) * 100) if open_val else 0
+    gr_only_pct = (df[df['status']=='GR Done / IR Pending']['open_val'].sum() / open_val * 100) if open_val else 0
+    partial_pct = (df[df['status']=='GR Greater Than Invoice']['open_val'].sum() / open_val * 100) if open_val else 0
+    over_inv_pct= (df[df['status']=='Invoice Greater Than GR']['open_val'].abs().sum() / abs(open_val) * 100) if open_val else 0
 
     risk_flags = []
-    if (df['status']=='OVER INVOICED').sum() > 0:
-        risk_flags.append(f"{(df['status']=='OVER INVOICED').sum()} over-invoiced items detected — potential overpayment or fraud risk")
-    if (df['status']=='IR ONLY').sum() > 0:
-        risk_flags.append(f"{(df['status']=='IR ONLY').sum()} invoices received without goods receipt — 3-way match control failure")
-    if (df['aging_bucket'].isin(['91-180','180+']) & (~df['reconciled'])).sum() > 0:
-        old_val = df[df['aging_bucket'].isin(['91-180','180+']) & (~df['reconciled'])]['open_val'].abs().sum()
+    if (df['status']=='Invoice Greater Than GR').sum() > 0:
+        risk_flags.append(f"{(df['status']=='Invoice Greater Than GR').sum()} over-invoiced items detected — potential overpayment or fraud risk")
+    if (df['status']=='IR Done / GR Pending').sum() > 0:
+        risk_flags.append(f"{(df['status']=='IR Done / GR Pending').sum()} invoices received without goods receipt — 3-way match control failure")
+    if (df['aging_bucket'].isin(['91-180','181-365','365+']) & (~df['reconciled'])).sum() > 0:
+        old_val = df[df['aging_bucket'].isin(['91-180','181-365','365+']) & (~df['reconciled'])]['open_val'].abs().sum()
         risk_flags.append(f"INR {old_val/1e7:.2f} Cr in items aged >90 days — overdue for clearance")
-    if crit > 0:
-        risk_flags.append(f"{crit} PO items classified as CRITICAL risk requiring immediate action")
+    if actionable > 0:
+        risk_flags.append(f"{actionable} PO items classified as Actionable Exceptions requiring immediate attention")
 
     return {
         'headline':    f"INR {open_cr:.2f} Cr of GRIR exposure unreconciled across {open_items:,} PO items as of {ANALYSIS_DATE.strftime('%d %B %Y')}",
@@ -1272,13 +1305,13 @@ def build_executive_summary(df, kpis, analysis_date=None):
             f"carry unresolved GR/IR balances. {abs(gr_only_pct):.0f}% of open exposure relates to "
             f"goods received without invoices (accrual risk), {abs(partial_pct):.0f}% to partially invoiced "
             f"deliveries, and {abs(over_inv_pct):.0f}% to potential over-invoicing. "
-            f"{crit} PO items are CRITICAL and require immediate escalation."
+            f"{actionable} PO items are actionable exceptions."
         ),
         'risk_flags':  risk_flags,
         'key_metrics': {
             'open_value_cr':     round(open_cr, 2),
             'reconciliation_pct':round(recon_rate, 1),
-            'critical_items':    crit,
+            'actionable_items':  actionable,
             'unique_vendors':    kpis['unique_vendors'],
             'total_pos':         kpis['unique_pos'],
         },
@@ -1416,13 +1449,13 @@ def main():
     existing = [c for c in all_items_cols if c in df.columns]
     all_items = df[existing].copy()
 
-    all_items['open_aging_days'] = all_items.apply(
-        lambda r: int(r['days_open']) if pd.notna(r['days_open']) and r['status'] != 'Reconciled' else "",
-        axis=1
+    all_items['open_aging_days'] = np.where(
+        all_items['days_open'].notna() & (all_items['status'] != 'Reconciled'),
+        all_items['days_open'].fillna(0).astype(int).astype(str),
+        ""
     )
 
-    all_items['posting_date'] = all_items['posting_date'].apply(
-        lambda d: d.strftime('%Y-%m-%d') if pd.notna(d) else '')
+    all_items['posting_date'] = all_items['posting_date'].dt.strftime('%Y-%m-%d').fillna('')
     all_items = all_items.fillna('')
     all_items_list = all_items.to_dict('records')
 

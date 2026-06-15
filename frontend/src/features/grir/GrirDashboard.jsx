@@ -56,19 +56,23 @@ const RISK_COLORS = {
   'LOW': '#10b981',      // Emerald
 }
 
-function GrirKPICard({ title, value, sub, icon: Icon, colorClass, isLoading }) {
+function GrirKPICard({ title, value, sub, icon: Icon, colorClass, isLoading, tooltip, description }) {
   return (
-    <div className="glass-card-hover p-6 flex items-center justify-between">
+    <div className="glass-card-hover p-6 flex items-start justify-between" title={tooltip}>
       <div className="space-y-2">
-        <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">{title}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">{title}</p>
+          {tooltip && <Info size={12} className="text-slate-500 cursor-help" />}
+        </div>
         {isLoading ? (
           <div className="h-8 w-24 bg-slate-800 animate-pulse rounded" />
         ) : (
           <p className="text-2xl font-black text-white tracking-tight">{value}</p>
         )}
         <p className="text-xs text-slate-400 font-medium">{sub}</p>
+        {description && <p className="text-[10px] text-amber-500/80 font-medium leading-tight max-w-[200px] mt-1">{description}</p>}
       </div>
-      <div className={`p-3.5 rounded-2xl border ${colorClass}`}>
+      <div className={`p-3.5 rounded-2xl border ${colorClass} shrink-0`}>
         <Icon size={24} />
       </div>
     </div>
@@ -380,12 +384,13 @@ export default function GrirDashboard() {
             isLoading={isSummaryLoading}
           />
           <GrirKPICard
-            title="Critical Risk Items"
-            value={summary?.kpis ? safeLocaleString(summary.kpis.critical_items) : '--'}
-            sub="Immediate escalation required"
-            icon={ShieldAlert}
-            colorClass="text-red-400 bg-red-500/10 border-red-500/20"
+            title="Actionable Exceptions"
+            value={summary?.kpis ? `${safeLocaleString(summary.kpis.actionable_exceptions_count)} Items` : '--'}
+            sub={summary?.kpis ? `${formatINR(summary.kpis.actionable_exceptions_val)} Total Exposure` : 'Immediate escalation required'}
+            icon={AlertTriangle}
+            colorClass="text-amber-400 bg-amber-500/10 border-amber-500/20"
             isLoading={isSummaryLoading}
+            description="> 90 Days Old OR Over-Invoiced"
           />
           <GrirKPICard
             title="Open PO Count"
@@ -433,8 +438,8 @@ export default function GrirDashboard() {
 
               {summary.executive_summary.risk_flags?.length > 0 && (
                 <div className="w-full lg:w-96 flex-shrink-0 bg-slate-950/60 border border-slate-800/80 rounded-2xl p-4 space-y-3">
-                  <p className="text-xs text-red-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
-                    <AlertTriangle size={14} /> Critical Risk Flags
+                  <p className="text-xs text-amber-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                    <AlertTriangle size={14} /> Actionable Exception Flags
                   </p>
                   <ul className="space-y-2 text-xs text-slate-300">
                     {summary.executive_summary.risk_flags.map((flag, idx) => (
