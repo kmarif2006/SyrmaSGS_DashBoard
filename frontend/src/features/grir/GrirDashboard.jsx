@@ -36,7 +36,8 @@ import {
   Loader2,
   RotateCcw,
   BarChart3,
-  BookOpen
+  BookOpen,
+  FileType
 } from 'lucide-react'
 
 // Colors for charts
@@ -175,8 +176,8 @@ function GrirUploadZone({ onUploadSuccess }) {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
                 { label: 'File Name', value: metadata.file_name, mono: false },
-                { label: 'Records', value: (metadata.num_records || 0).toLocaleString(), mono: true },
-                { label: 'PO Count', value: (metadata.num_pos || 0).toLocaleString(), mono: true },
+                { label: 'Records', value: (metadata.record_count || 0).toLocaleString(), mono: true },
+                { label: 'PO Count', value: (metadata.po_count || 0).toLocaleString(), mono: true },
                 { label: 'Uploaded', value: metadata.upload_date || 'Pre-loaded', mono: false },
               ].map(m => (
                 <div key={m.label} className="bg-slate-900/50 border border-slate-800/60 rounded-xl p-3">
@@ -1448,6 +1449,74 @@ export default function GrirDashboard() {
     )
   }
 
+  const renderIsolated7P = () => {
+    const data = summary?.isolated_type_7p
+    if (!data || !data.items || data.items.length === 0) {
+      return (
+        <div className="p-10 text-center bg-slate-900/50 border border-slate-800 rounded-xl">
+          <p className="text-slate-400">No Type 7 or Type P transactions found in this dataset.</p>
+        </div>
+      )
+    }
+
+    return (
+      <section className="space-y-6 animate-fadeIn">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <FileType className="text-indigo-400" /> Isolated Type 7 & Type P Log
+            </h2>
+            <p className="text-sm text-slate-400 mt-1 max-w-3xl leading-relaxed">
+              These transaction types do not impact core GR/IR balance and are listed here for isolated auditing. 
+              Their values are mathematically zeroed out from the main dashboard exposure logic.
+            </p>
+          </div>
+          <div className="flex gap-4">
+            <div className="bg-slate-900 px-4 py-2 rounded-lg border border-slate-800 text-center">
+              <p className="text-[10px] text-slate-500 uppercase font-bold">Total Type 7 Qty</p>
+              <p className="text-sm font-black text-white">{safeLocaleString(data.total_7_qty)}</p>
+            </div>
+            <div className="bg-slate-900 px-4 py-2 rounded-lg border border-slate-800 text-center">
+              <p className="text-[10px] text-slate-500 uppercase font-bold">Total Type P Qty</p>
+              <p className="text-sm font-black text-white">{safeLocaleString(data.total_p_qty)}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="glass-card border-slate-800 rounded-xl overflow-hidden bg-slate-900/50">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-950">
+              <tr>
+                <th className="py-3 px-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">PO Number</th>
+                <th className="py-3 px-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Item</th>
+                <th className="py-3 px-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Vendor</th>
+                <th className="py-3 px-4 text-[10px] font-black text-slate-500 uppercase tracking-widest">Material</th>
+                <th className="py-3 px-4 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Type 7 Qty</th>
+                <th className="py-3 px-4 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Type 7 Val</th>
+                <th className="py-3 px-4 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Type P Qty</th>
+                <th className="py-3 px-4 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Type P Val</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60">
+              {data.items.slice(0, 100).map((item, idx) => (
+                <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
+                  <td className="py-3 px-4 text-slate-300 font-mono text-xs">{item.po_number}</td>
+                  <td className="py-3 px-4 text-slate-400 font-mono text-xs">{item.po_item}</td>
+                  <td className="py-3 px-4 text-slate-300">{item.vendor}</td>
+                  <td className="py-3 px-4 text-slate-300">{item.material}</td>
+                  <td className="py-3 px-4 text-indigo-300 text-right font-mono font-bold">{safeLocaleString(item.type_7_qty)}</td>
+                  <td className="py-3 px-4 text-indigo-400 text-right font-mono font-bold">{formatINR(item.type_7_val)}</td>
+                  <td className="py-3 px-4 text-amber-300 text-right font-mono font-bold">{safeLocaleString(item.type_p_qty)}</td>
+                  <td className="py-3 px-4 text-amber-400 text-right font-mono font-bold">{formatINR(item.type_p_val)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    )
+  }
+
   if (summaryError) {
     return (
       <div className="min-h-screen bg-slate-950 pb-16">
@@ -1521,7 +1590,7 @@ export default function GrirDashboard() {
         </div>
 
         {/* Tab Navigation Menu */}
-        <div className="flex flex-wrap items-center gap-2 bg-slate-900/10 p-1.5 border border-slate-900 rounded-2xl backdrop-blur-md">
+        <div className="flex flex-wrap items-center gap-1 bg-[#111827] p-1 border border-slate-800 rounded-lg">
           {[
             { id: 'overview', name: 'Executive Overview', icon: Activity },
             { id: 'vendors', name: 'Vendor Analytics', icon: Users },
@@ -1529,6 +1598,7 @@ export default function GrirDashboard() {
             { id: 'aging', name: 'Aging Engine', icon: Clock },
             { id: 'reversals', name: 'Reversal Log', icon: RefreshCw },
             { id: 'variance', name: 'Price Variance', icon: Percent },
+            { id: 'isolated_7p', name: 'Isolated 7/P', icon: FileType },
             { id: 'explorer', name: 'Ledger Explorer', icon: Search }
           ].map(tab => {
             const Icon = tab.icon
@@ -1536,11 +1606,13 @@ export default function GrirDashboard() {
             return (
               <button
                 key={tab.id}
+                role="tab"
+                aria-selected={isActive}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all border ${
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-bold transition-colors border ${
                   isActive 
-                    ? 'bg-indigo-600/15 border-indigo-500/30 text-indigo-400 font-extrabold shadow-lg shadow-indigo-500/5' 
-                    : 'bg-slate-900/40 border-slate-800/80 text-slate-400 hover:text-slate-200 hover:bg-slate-900/60 hover:border-slate-700/80'
+                    ? 'bg-slate-800 border-slate-600 text-indigo-400' 
+                    : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
                 }`}
               >
                 <Icon size={14} className={isActive ? 'text-indigo-400' : 'text-slate-500'} />
@@ -1558,6 +1630,7 @@ export default function GrirDashboard() {
           {activeTab === 'aging' && renderAging()}
           {activeTab === 'reversals' && renderReversals()}
           {activeTab === 'variance' && renderPriceVariance()}
+          {activeTab === 'isolated_7p' && renderIsolated7P()}
           {activeTab === 'explorer' && renderLedgerExplorer()}
         </div>
 

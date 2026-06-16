@@ -234,7 +234,8 @@ from grir_analysis import (
     build_price_variance, build_reversal_analysis, build_exceptions,
     build_recommended_actions, build_executive_summary, build_financial_impact,
     classify_status, compute_risk, compute_row_risk, aging_bucket, explain,
-    calculate_group_risk_scores, generate_risk_flags, generate_deterministic_insights
+    calculate_group_risk_scores, generate_risk_flags, generate_deterministic_insights,
+    build_type_7p_analysis
 )
 class GRIRAnalyticsService:
     def __init__(self):
@@ -578,6 +579,7 @@ class GRIRAnalyticsService:
             'top_exceptions': exceptions,
             'recommended_actions': actions,
             'deterministic_insights': deterministic_insights,
+            'isolated_type_7p': build_type_7p_analysis(df),
             'all_items': all_items_list,
         }
 

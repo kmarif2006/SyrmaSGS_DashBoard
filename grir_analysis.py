@@ -497,8 +497,14 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
     grir_df['GR_Date'] = pd.to_datetime(grir_df['GR_Date'])
     grir_df['IR_Date'] = pd.to_datetime(grir_df['IR_Date'])
     
-    grir_df['is_gr'] = (grir_df['Trans Type'] == '1')
-    grir_df['is_ir'] = (grir_df['Trans Type'] == '2')
+    tt = grir_df['Trans Type'].astype(str).str.strip().str.upper()
+    grir_df['is_gr'] = tt.isin(['1', '1.0', '01'])
+    grir_df['is_ir'] = tt.isin(['2', '2.0', '02'])
+    
+    grir_df['Type_7_Val'] = np.where(tt.isin(['7', '7.0', '07']), grir_df['Signed_Amount_INR'], 0.0)
+    grir_df['Type_7_Qty'] = np.where(tt.isin(['7', '7.0', '07']), grir_df['Signed_Qty'], 0.0)
+    grir_df['Type_P_Val'] = np.where(tt == 'P', grir_df['Signed_Amount_INR'], 0.0)
+    grir_df['Type_P_Qty'] = np.where(tt == 'P', grir_df['Signed_Qty'], 0.0)
     
     trans_type = grir_df['Trans Type'].astype(str).str.strip()
     drcr = grir_df['Dr/Cr Ind'].astype(str).str.strip()
@@ -523,6 +529,10 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
         Net_IR_Val_INR=('IR_Value_INR', 'sum'),
         Net_GR_Qty=('GR_Qty', 'sum'),
         Net_IR_Qty=('IR_Qty', 'sum'),
+        Type_7_Val=('Type_7_Val', 'sum'),
+        Type_7_Qty=('Type_7_Qty', 'sum'),
+        Type_P_Val=('Type_P_Val', 'sum'),
+        Type_P_Qty=('Type_P_Qty', 'sum'),
         GR_Txn_Count=('is_gr', 'sum'),
         IR_Txn_Count=('is_ir', 'sum'),
         First_GR_Date=('GR_Date', 'min'),
@@ -659,7 +669,9 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
     agg_df['gr_reversal_val'] = agg_df.get('GR_Reversal_Val_PO', 0.0)
     
     ir_qty_abs = agg_df['Net_IR_Qty'].abs()
-    agg_df['reversal_pct'] = np.where(ir_qty_abs > 0, (agg_df['ir_reversal_qty'] / ir_qty_abs * 100).fillna(0.0).clip(0, 100), 0.0)
+    tot_rev = agg_df['ir_reversal_qty'] + agg_df['gr_reversal_qty']
+    tot_net = agg_df['Net_IR_Qty'].abs() + agg_df['Net_GR_Qty'].abs()
+    agg_df['reversal_pct'] = np.where(tot_net > 0, (tot_rev / tot_net * 100).fillna(0.0).clip(0, 100), np.where(tot_rev > 0, 100.0, 0.0))
 
     # Invoice completion percentage
     agg_df['inv_completion_pct'] = np.where(
@@ -1402,6 +1414,39 @@ def safe_json(obj):
     raise TypeError(f"Type {type(obj)} not serializable")
 
 
+def build_type_7p_analysis(df):
+    """Isolate Type 7 and Type P metrics to render outside of the main KPI flow"""
+    if 'Type_7_Qty' not in df.columns:
+        return {'total_items': 0, 'items': []}
+        
+    mask = (df['Type_7_Qty'].abs() > 0) | (df['Type_P_Qty'].abs() > 0) | (df['Type_7_Val'].abs() > 0) | (df['Type_P_Val'].abs() > 0)
+    t7p = df[mask].copy()
+    
+    if t7p.empty:
+        return {'total_items': 0, 'total_7_qty': 0, 'total_p_qty': 0, 'items': []}
+        
+    items = []
+    for row in t7p.sort_values(by=['Type_7_Val', 'Type_P_Val'], key=abs, ascending=False).to_dict('records'):
+        items.append({
+            'po_number': str(row.get('PO Number', '')),
+            'po_item': str(row.get('PO Item', '')),
+            'vendor': str(row.get('Vendor', ''))[:60],
+            'material': str(row.get('Short Text', ''))[:60],
+            'type_7_qty': round(float(row.get('Type_7_Qty', 0)), 2),
+            'type_7_val': round(float(row.get('Type_7_Val', 0)), 2),
+            'type_p_qty': round(float(row.get('Type_P_Qty', 0)), 2),
+            'type_p_val': round(float(row.get('Type_P_Val', 0)), 2)
+        })
+        
+    return {
+        'total_items': len(items),
+        'total_7_qty': round(float(t7p['Type_7_Qty'].sum()), 2),
+        'total_7_val': round(float(t7p['Type_7_Val'].sum()), 2),
+        'total_p_qty': round(float(t7p['Type_P_Qty'].sum()), 2),
+        'total_p_val': round(float(t7p['Type_P_Val'].sum()), 2),
+        'items': items
+    }
+
 def main():
     print("\n" + "="*65)
     print("  SAP GR/IR RECONCILIATION ANALYSIS ENGINE")
@@ -1481,7 +1526,6 @@ def main():
     all_items['posting_date'] = all_items['posting_date'].dt.strftime('%Y-%m-%d').fillna('')
     all_items = all_items.fillna('')
     all_items_list = all_items.to_dict('records')
-
     # Construct the final schema response payload
     output = {
         'metadata': {
@@ -1569,6 +1613,7 @@ def main():
         'top_exceptions':          exceptions,
         'recommended_actions':     actions,
         'deterministic_insights':  deterministic_insights,
+        'isolated_type_7p':        build_type_7p_analysis(df),
         'all_items':               all_items_list
     }
 
