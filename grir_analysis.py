@@ -1395,6 +1395,39 @@ def build_financial_impact(df, kpis):
     ]
 
 
+def build_time_series_analytics(df):
+    """Generate time series data for Cumulative GR vs IR and Match Rate"""
+    if 'posting_date' not in df.columns:
+        return {'trend': [], 'match_rate': []}
+        
+    ts_df = df.dropna(subset=['posting_date']).copy()
+    if ts_df.empty:
+        return {'trend': [], 'match_rate': []}
+        
+    ts_df['month'] = ts_df['posting_date'].dt.to_period('M').astype(str)
+    
+    match_rate_df = ts_df.groupby('month').agg(
+        total_lines=('PO Number', 'count'),
+        matched_lines=('reconciled', 'sum')
+    ).reset_index()
+    match_rate_df['match_rate_pct'] = (match_rate_df['matched_lines'] / match_rate_df['total_lines'] * 100).round(1)
+    match_rate_df = match_rate_df.sort_values('month')
+    match_rate_data = match_rate_df[['month', 'match_rate_pct', 'total_lines']].to_dict('records')
+    
+    trend_df = ts_df.groupby('month').agg(
+        gr_value=('Net_GR_Val_INR', 'sum'),
+        ir_value=('Net_IR_Val_INR', 'sum')
+    ).reset_index().sort_values('month')
+    
+    trend_df['cumulative_gr'] = trend_df['gr_value'].cumsum().round(2)
+    trend_df['cumulative_ir'] = trend_df['ir_value'].cumsum().round(2)
+    trend_data = trend_df[['month', 'cumulative_gr', 'cumulative_ir']].to_dict('records')
+    
+    return {
+        'trend': trend_data,
+        'match_rate': match_rate_data
+    }
+
 def safe_json(obj):
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()

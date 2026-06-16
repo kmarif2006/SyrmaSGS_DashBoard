@@ -235,7 +235,7 @@ from grir_analysis import (
     build_recommended_actions, build_executive_summary, build_financial_impact,
     classify_status, compute_risk, compute_row_risk, aging_bucket, explain,
     calculate_group_risk_scores, generate_risk_flags, generate_deterministic_insights,
-    build_type_7p_analysis
+    build_type_7p_analysis, build_time_series_analytics
 )
 class GRIRAnalyticsService:
     def __init__(self):
@@ -451,6 +451,7 @@ class GRIRAnalyticsService:
         actions = build_recommended_actions(df, kpis)
         exec_sum = build_executive_summary(df, kpis, self._analysis_date)
         fin_imp = build_financial_impact(df, kpis)
+        time_series = build_time_series_analytics(df)
 
         vendor_risk = calculate_group_risk_scores(df, 'Vendor', total_open_exposure)
         material_risk = calculate_group_risk_scores(df, 'Short Text', total_open_exposure)
@@ -579,6 +580,7 @@ class GRIRAnalyticsService:
             'top_exceptions': exceptions,
             'recommended_actions': actions,
             'deterministic_insights': deterministic_insights,
+            'time_series_analytics': time_series,
             'isolated_type_7p': build_type_7p_analysis(df),
             'all_items': all_items_list,
         }

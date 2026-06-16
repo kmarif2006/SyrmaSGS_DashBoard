@@ -8,7 +8,7 @@ import { NavBar } from '../../shared'
 import { uploadGrirFile, fetchGrirUploadMetadata } from '../../shared'
 import { 
   BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
-  PieChart, Pie, Cell
+  PieChart, Pie, Cell, LineChart, Line, AreaChart, Area
 } from 'recharts'
 import { 
   DollarSign, 
@@ -81,7 +81,7 @@ function GrirKPICard({ title, value, sub, icon: Icon, colorClass, isLoading, too
 }
 
 // ── Upload Zone Component ─────────────────────────────────────────────────────
-function GrirUploadZone({ onUploadSuccess }) {
+function GrirUploadZone({ onUploadSuccess, onUploadStart }) {
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -105,6 +105,7 @@ function GrirUploadZone({ onUploadSuccess }) {
     }
     setError(null)
     setUploading(true)
+    if (onUploadStart) onUploadStart()
     setProgress(0)
     try {
       const res = await uploadGrirFile(file, p => setProgress(p))
@@ -115,7 +116,7 @@ function GrirUploadZone({ onUploadSuccess }) {
     } finally {
       setUploading(false)
     }
-  }, [onUploadSuccess])
+  }, [onUploadSuccess, onUploadStart])
 
   const onDrop = useCallback((e) => {
     e.preventDefault()
@@ -200,16 +201,26 @@ function GrirUploadZone({ onUploadSuccess }) {
   )
 }
 
+// ── Skeleton UI Helpers ────────────────────────────────────────────────────────
+const SkeletonBlock = ({ className }) => (
+  <div className={`animate-pulse bg-slate-800/50 rounded-2xl ${className}`} />
+)
+
 // ── Main Dashboard Component ───────────────────────────────────────────────────
 export default function GrirDashboard() {
   const queryClient = useQueryClient()
   const { data: summary, isLoading: isSummaryLoading, error: summaryError, refetch: refetchSummary } = useGrirSummary()
+  
+  const [isUploadingFile, setIsUploadingFile] = useState(false)
 
   const handleUploadSuccess = useCallback(() => {
+    setIsUploadingFile(false)
     // Invalidate GRIR queries so the dashboard auto-refreshes with new data
     queryClient.invalidateQueries({ queryKey: ['grirSummary'] })
     queryClient.invalidateQueries({ queryKey: ['grirItems'] })
   }, [queryClient])
+
+  const showLoading = isSummaryLoading || isUploadingFile;
 
   // Tab state
   const [activeTab, setActiveTab] = useState('overview')
@@ -358,7 +369,7 @@ export default function GrirDashboard() {
             sub={`${summary?.kpis ? safeLocaleString(summary.kpis.reconciled_count) : '--'} / ${summary?.kpis ? safeLocaleString(summary.kpis.total_po_items) : '--'} PO lines`}
             icon={CheckCircle2}
             colorClass="text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
-            isLoading={isSummaryLoading}
+            isLoading={showLoading}
           />
           <GrirKPICard
             title="Total Open Exposure"
@@ -366,7 +377,7 @@ export default function GrirDashboard() {
             sub="Net GR minus IR value"
             icon={DollarSign}
             colorClass="text-indigo-400 bg-indigo-500/10 border-indigo-500/20"
-            isLoading={isSummaryLoading}
+            isLoading={showLoading}
           />
           <GrirKPICard
             title="Total GR Value"
@@ -374,7 +385,7 @@ export default function GrirDashboard() {
             sub="Cumulative goods receipt value"
             icon={BarChart3}
             colorClass="text-blue-400 bg-blue-500/10 border-blue-500/20"
-            isLoading={isSummaryLoading}
+            isLoading={showLoading}
           />
           <GrirKPICard
             title="Total IR Value"
@@ -382,7 +393,7 @@ export default function GrirDashboard() {
             sub="Cumulative invoice receipt value"
             icon={FileText}
             colorClass="text-violet-400 bg-violet-500/10 border-violet-500/20"
-            isLoading={isSummaryLoading}
+            isLoading={showLoading}
           />
           <GrirKPICard
             title="Actionable Exceptions"
@@ -390,7 +401,7 @@ export default function GrirDashboard() {
             sub={summary?.kpis ? `${formatINR(summary.kpis.actionable_exceptions_val)} Total Exposure` : 'Immediate escalation required'}
             icon={AlertTriangle}
             colorClass="text-amber-400 bg-amber-500/10 border-amber-500/20"
-            isLoading={isSummaryLoading}
+            isLoading={showLoading}
             description="> 90 Days Old OR Over-Invoiced"
           />
           <GrirKPICard
@@ -399,7 +410,7 @@ export default function GrirDashboard() {
             sub="Unique POs with open items"
             icon={BookOpen}
             colorClass="text-cyan-400 bg-cyan-500/10 border-cyan-500/20"
-            isLoading={isSummaryLoading}
+            isLoading={showLoading}
           />
           <GrirKPICard
             title="Reversal Count (Val)"
@@ -407,7 +418,7 @@ export default function GrirDashboard() {
             sub="Total reversed IR value"
             icon={RotateCcw}
             colorClass="text-rose-400 bg-rose-500/10 border-rose-500/20"
-            isLoading={isSummaryLoading}
+            isLoading={showLoading}
           />
           <GrirKPICard
             title="Active Vendors"
@@ -415,13 +426,31 @@ export default function GrirDashboard() {
             sub="With open GR/IR balances"
             icon={Users}
             colorClass="text-amber-400 bg-amber-500/10 border-amber-500/20"
-            isLoading={isSummaryLoading}
+            isLoading={showLoading}
           />
         </div>
 
         {/* Executive Summary Narrative */}
-        {summary?.executive_summary && (
-          <div className="glass-card p-6 bg-slate-900/40 relative overflow-hidden border-indigo-500/10">
+        {showLoading ? (
+          <div className="glass-card p-6 bg-slate-900/40 border-indigo-500/10 mb-6 flex flex-col lg:flex-row gap-6">
+            <div className="flex-1 space-y-4">
+              <SkeletonBlock className="h-5 w-48" />
+              <SkeletonBlock className="h-8 w-3/4" />
+              <div className="space-y-2 mt-4">
+                <SkeletonBlock className="h-4 w-full" />
+                <SkeletonBlock className="h-4 w-5/6" />
+                <SkeletonBlock className="h-4 w-4/6" />
+              </div>
+            </div>
+            <div className="w-full lg:w-96 flex-shrink-0 bg-slate-950/60 border border-slate-800/80 rounded-2xl p-4 space-y-3">
+              <SkeletonBlock className="h-4 w-40 mb-4" />
+              <SkeletonBlock className="h-4 w-full" />
+              <SkeletonBlock className="h-4 w-full" />
+              <SkeletonBlock className="h-4 w-4/5" />
+            </div>
+          </div>
+        ) : summary?.executive_summary && (
+          <div className="glass-card p-6 bg-slate-900/40 relative overflow-hidden border-indigo-500/10 mb-6">
             <div className="absolute top-0 right-0 w-[40%] h-[150%] bg-indigo-500/5 blur-[100px] pointer-events-none rounded-full" />
             <div className="flex flex-col lg:flex-row gap-6 items-start justify-between relative z-10">
               <div className="space-y-3 flex-1">
@@ -457,24 +486,95 @@ export default function GrirDashboard() {
         )}
 
         {/* Charts & Analytical Details */}
-        <div className="w-full mb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
           
-          {/* Status Distribution */}
-          <div className="glass-card p-6 flex flex-col w-full">
-            <div className="mb-6 flex justify-between items-center">
-              <div>
-                <h3 className="text-base font-bold text-slate-100 mb-1">GR/IR Status Profile</h3>
-                <p className="text-xs text-slate-500 font-bold tracking-wide uppercase">Volume distribution of all PO lines</p>
-              </div>
-              <span className="badge bg-slate-800 text-slate-400 font-semibold text-[10px] border border-slate-700">6 Categories</span>
+          {/* Match Rate Over Time */}
+          <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-6 flex flex-col w-full h-[350px]">
+            <div className="mb-4">
+              <h3 className="text-sm font-bold text-slate-100 mb-1">Reconciliation Accuracy Trend</h3>
+              <p className="text-[10px] text-slate-500 font-bold tracking-wide uppercase">Match rate percentage by posting month</p>
             </div>
-            <div className="w-full h-[350px]">
+            <div className="w-full flex-1">
+              {showLoading ? (
+                <SkeletonBlock className="w-full h-full" />
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={summary?.time_series_analytics?.match_rate || []} margin={{ top: 15, right: 10, left: -20, bottom: 5 }}>
+                    <XAxis dataKey="month" stroke="#475569" className="text-[10px]" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis stroke="#475569" className="text-[10px]" tick={{ fontSize: 10 }} tickFormatter={(val) => `${val}%`} domain={[0, 100]} axisLine={false} tickLine={false} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px' }}
+                      labelClassName="text-slate-100 font-bold text-xs mb-2"
+                      itemClassName="text-xs font-mono"
+                      formatter={(value) => [`${value}%`, 'Match Rate']}
+                    />
+                    <Line type="monotone" dataKey="match_rate_pct" stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: '#10b981', strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          {/* Cumulative GR vs IR Trend */}
+          <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-6 flex flex-col w-full h-[350px]">
+            <div className="mb-4">
+              <h3 className="text-sm font-bold text-slate-100 mb-1">Cumulative Ledger Value Trend</h3>
+              <p className="text-[10px] text-slate-500 font-bold tracking-wide uppercase">Total GR vs IR volume over time (INR)</p>
+            </div>
+            <div className="w-full flex-1">
+              {showLoading ? (
+                <SkeletonBlock className="w-full h-full" />
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={summary?.time_series_analytics?.trend || []} margin={{ top: 15, right: 10, left: 10, bottom: 5 }}>
+                  <defs>
+                    <linearGradient id="colorGr" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#06b6d4" stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="colorIr" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="month" stroke="#475569" className="text-[10px]" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis stroke="#475569" className="text-[10px]" tick={{ fontSize: 10 }} tickFormatter={(val) => `₹${(val/10000000).toFixed(0)}Cr`} axisLine={false} tickLine={false} />
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px' }}
+                    labelClassName="text-slate-100 font-bold text-xs mb-2"
+                    itemClassName="text-xs font-mono"
+                    formatter={(value) => formatINR(value)}
+                  />
+                  <Area type="monotone" dataKey="cumulative_gr" stroke="#06b6d4" strokeWidth={2} fillOpacity={1} fill="url(#colorGr)" name="Total GR" />
+                  <Area type="monotone" dataKey="cumulative_ir" stroke="#f59e0b" strokeWidth={2} fillOpacity={1} fill="url(#colorIr)" name="Total IR" />
+                  <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} iconType="circle" />
+                </AreaChart>
+              </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+        </div>
+        
+        {/* Status Distribution */}
+        <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-6 flex flex-col w-full mb-6">
+          <div className="mb-6 flex justify-between items-center">
+            <div>
+              <h3 className="text-sm font-bold text-slate-100 mb-1">GR/IR Status Profile</h3>
+              <p className="text-[10px] text-slate-500 font-bold tracking-wide uppercase">Volume distribution of all PO lines</p>
+            </div>
+            <span className="bg-slate-800 text-slate-400 font-semibold text-[10px] border border-slate-700 px-2 py-1 rounded-full">6 Categories</span>
+          </div>
+          <div className="w-full h-[300px]">
+            {showLoading ? (
+              <SkeletonBlock className="w-full h-full" />
+            ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={statusChartData} layout="vertical" margin={{ left: 50, right: 20 }}>
-                  <XAxis type="number" stroke="#475569" className="text-xs" />
-                  <YAxis type="category" dataKey="name" stroke="#475569" className="text-xs" width={120} />
+                  <XAxis type="number" stroke="#475569" className="text-xs" axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="name" stroke="#475569" className="text-[10px]" width={120} axisLine={false} tickLine={false} />
                   <Tooltip 
-                    contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155' }}
+                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px' }}
                     labelClassName="text-slate-100 font-bold text-xs"
                     itemClassName="text-xs text-slate-300"
                   />
@@ -485,7 +585,7 @@ export default function GrirDashboard() {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-            </div>
+            )}
           </div>
         </div>
 
@@ -505,28 +605,37 @@ export default function GrirDashboard() {
             </div>
             
             <div className="flex-1 space-y-4">
-              {summary?.financial_impact?.map((impact, idx) => (
-                <div key={idx} className="p-4 bg-slate-900/35 border border-slate-850 rounded-2xl flex flex-col sm:flex-row gap-4 justify-between items-start">
-                  <div className="space-y-1.5 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[10px] font-black tracking-widest px-2 py-0.5 rounded-full uppercase ${
-                        impact.severity === 'CRITICAL' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
-                      }`}>
-                        {impact.severity}
-                      </span>
-                      <h4 className="text-sm font-bold text-white">{impact.area}</h4>
+              {showLoading ? (
+                [1, 2, 3].map(i => (
+                  <div key={i} className="flex justify-between items-center py-2">
+                    <SkeletonBlock className="h-4 w-32" />
+                    <SkeletonBlock className="h-4 w-24" />
+                  </div>
+                ))
+              ) : (
+                summary?.financial_impact?.map((impact, idx) => (
+                  <div key={idx} className="p-4 bg-slate-900/35 border border-slate-850 rounded-2xl flex flex-col sm:flex-row gap-4 justify-between items-start">
+                    <div className="space-y-1.5 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-black tracking-widest px-2 py-0.5 rounded-full uppercase ${
+                          impact.severity === 'CRITICAL' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
+                        }`}>
+                          {impact.severity}
+                        </span>
+                        <h4 className="text-sm font-bold text-white">{impact.area}</h4>
+                      </div>
+                      <p className="text-xs text-slate-400 leading-relaxed">{impact.description}</p>
+                      <p className="text-[11px] text-slate-500 font-medium"><strong className="text-slate-400">Resolution Action:</strong> {impact.action}</p>
                     </div>
-                    <p className="text-xs text-slate-400 leading-relaxed">{impact.description}</p>
-                    <p className="text-[11px] text-slate-500 font-medium"><strong className="text-slate-400">Resolution Action:</strong> {impact.action}</p>
+                    
+                    <div className="text-left sm:text-right flex-shrink-0">
+                      <p className="text-[10px] text-slate-500 uppercase font-black tracking-wider">Estimated Impact</p>
+                      <p className="text-base font-black text-indigo-400 mt-0.5">{formatINR(impact.impact_val)}</p>
+                      <p className="text-[10px] text-slate-500 mt-0.5 font-bold">₹{impact.impact_cr.toFixed(2)} Cr</p>
+                    </div>
                   </div>
-                  
-                  <div className="text-left sm:text-right flex-shrink-0">
-                    <p className="text-[10px] text-slate-500 uppercase font-black tracking-wider">Estimated Impact</p>
-                    <p className="text-base font-black text-indigo-400 mt-0.5">{formatINR(impact.impact_val)}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5 font-bold">₹{impact.impact_cr.toFixed(2)} Cr</p>
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
 
@@ -543,29 +652,41 @@ export default function GrirDashboard() {
             </div>
 
             <div className="flex-1 space-y-4 max-h-[480px] overflow-y-auto pr-1">
-              {summary?.recommended_actions?.map((act, idx) => (
-                <div key={idx} className="p-4 bg-slate-900/35 border border-slate-850 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[10px] font-black tracking-widest px-2 py-0.5 rounded-full uppercase ${
-                        act.priority === 'CRITICAL' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 
-                        act.priority === 'HIGH' ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20' : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
-                      }`}>
-                        {act.priority} PRIORITY
-                      </span>
-                      <span className="text-xs text-slate-400 font-bold">• {act.category}</span>
+              {showLoading ? (
+                [1, 2, 3].map(i => (
+                  <div key={i} className="flex gap-3">
+                    <SkeletonBlock className="h-4 w-4 mt-1 rounded-full flex-shrink-0" />
+                    <div className="space-y-2 flex-1">
+                      <SkeletonBlock className="h-4 w-full" />
+                      <SkeletonBlock className="h-3 w-5/6" />
                     </div>
-                    <span className="text-[10px] text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded font-bold">{act.timeline}</span>
                   </div>
+                ))
+              ) : (
+                summary?.recommended_actions?.map((act, idx) => (
+                  <div key={idx} className="p-4 bg-slate-900/35 border border-slate-850 rounded-2xl space-y-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-black tracking-widest px-2 py-0.5 rounded-full uppercase ${
+                          act.priority === 'CRITICAL' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 
+                          act.priority === 'HIGH' ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20' : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
+                        }`}>
+                          {act.priority} PRIORITY
+                        </span>
+                        <span className="text-xs text-slate-400 font-bold">• {act.category}</span>
+                      </div>
+                      <span className="text-[10px] text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded font-bold">{act.timeline}</span>
+                    </div>
 
-                  <p className="text-xs font-semibold text-slate-200 leading-normal">{act.action}</p>
-                  
-                  <div className="flex justify-between items-center pt-2 border-t border-slate-800/40 text-[10px] text-slate-500">
-                    <p>Owner: <strong className="text-slate-400">{act.owner}</strong></p>
-                    <p>Impact: <strong className="text-slate-400">{act.impact}</strong></p>
+                    <p className="text-xs font-semibold text-slate-200 leading-normal">{act.action}</p>
+                    
+                    <div className="flex justify-between items-center pt-2 border-t border-slate-800/40 text-[10px] text-slate-500">
+                      <p>Owner: <strong className="text-slate-400">{act.owner}</strong></p>
+                      <p>Impact: <strong className="text-slate-400">{act.impact}</strong></p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -1517,12 +1638,12 @@ export default function GrirDashboard() {
     )
   }
 
-  if (summaryError) {
+  if (summaryError && !isUploadingFile) {
     return (
       <div className="min-h-screen bg-slate-950 pb-16">
         <NavBar />
         <main id="dashboard-container" className="max-w-[1600px] mx-auto px-5 pt-8 space-y-8">
-          <GrirUploadZone onUploadSuccess={handleUploadSuccess} />
+          <GrirUploadZone onUploadSuccess={handleUploadSuccess} onUploadStart={() => setIsUploadingFile(true)} />
           
           <div className="bg-slate-900/50 border border-red-500/20 rounded-2xl p-10 flex flex-col items-center justify-center text-center">
             <AlertTriangle size={64} className="text-red-500 mb-4 animate-bounce" />
@@ -1543,7 +1664,7 @@ export default function GrirDashboard() {
       <main id="dashboard-container" className="max-w-[1600px] mx-auto px-5 pt-8 space-y-8">
 
         {/* ── GRIR Upload Zone ────────────────────────────────────────────── */}
-        <GrirUploadZone onUploadSuccess={handleUploadSuccess} />
+        <GrirUploadZone onUploadSuccess={handleUploadSuccess} onUploadStart={() => setIsUploadingFile(true)} />
 
         {/* Title Block */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-slate-900">
