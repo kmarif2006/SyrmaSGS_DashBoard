@@ -1,20 +1,20 @@
-# Syrma SGS GR/IR Reconciliation & Procurement Analytics Dashboard
+# Syrma SGS — GR/IR Reconciliation & Procurement Analytics Platform
 
-An interactive, full-stack analytical platform designed for automated reconciliation of **Goods Receipt / Invoice Receipt (GR/IR)** account balances, procurement risk profiling, and audit reporting. 
+An enterprise-grade, full-stack analytical platform designed for automated reconciliation of **Goods Receipt / Invoice Receipt (GR/IR)** account balances, procurement risk profiling, and audit reporting.
 
-Built using a **Python Flask** backend and a modern **React (Vite + TailwindCSS)** frontend, the dashboard processes standard SAP exports (`GRIR`, `EKKO`, and `ME2N`) to surface discrepancies, aging exposure, and recommended action plans.
+Built using a **Python Flask** backend and a modern **React (Vite + TailwindCSS)** frontend, the dashboard processes SAP exports to instantly surface discrepancies, aging exposure, financial impact, and recommended action plans.
 
 ---
 
 ## 🚀 Key Features
 
-* **Multi-dataset Upload & Auto-Detection:** Seamless drag-and-drop file upload interface that automatically detects, maps, and validates SAP datasets (`grir.csv`, `EKKO.csv`, and `me2n.csv`).
-* **Deterministic Reconciliation Engine:** Connects purchasing documents (POs), line items, material data, and transactional postings to classify statuses (`FULLY RECONCILED`, `GR ONLY`, `IR ONLY`, `PARTIALLY INVOICED`, `OVER INVOICED`, `FULLY REVERSED`, `PRICE VARIANCE`).
-* **Interactive Dashboard:** Premium dark-themed UI featuring key performance metrics, interactive stacked bar charts (Aging composition), status distribution, and details.
-* **Risk Scoring & Audit Findings:** Automatically flags high-exposure transactions, overdue aging buckets (>90 days), control violations (invoices without goods receipts), and potential duplicate or over-invoicing risks.
-* **Automated Action Plan:** Generates contextual recommended actions assigned to respective business owners (e.g., Accounts Payable, Sourcing, Finance Controllers) with clear business impacts and timelines.
-* **PDF Report Generation:** One-click download of a multi-page, formatted PDF Audit Report utilizing ReportLab, perfect for executive review and audit trails.
-* **Power BI Integration:** Includes a pre-configured Power BI report (`Syrma_SGS_Power_BI_Report.pbix`) for alternative reporting configurations.
+* **Single-File Drag & Drop Upload:** Seamlessly upload your consolidated GR/IR `.csv` or `.xlsx` export. The platform automatically detects, maps, and validates the dataset.
+* **Deterministic Reconciliation Engine:** Connects purchasing documents (POs), line items, material data, and transactional postings to classify statuses (e.g., `FULLY RECONCILED`, `GR ONLY`, `IR ONLY`, `PARTIALLY INVOICED`, `OVER INVOICED`, `FULLY REVERSED`).
+* **Time-Series Trend Analysis:** Tracks month-over-month reconciliation accuracy (Match Rate) and cumulative ledger value trends (Total GR vs Total IR volume) to measure procurement efficiency over time.
+* **Actionable Exceptions Tracking:** Automatically isolates critical risk items, specifically flagging transactions that are **> 90 days old** or **Over-Invoiced**.
+* **Reversal Type Analysis:** Accurately isolates and computes exact financial metrics for Type 7 (Reversals) and Type P (Price Variance) postings, removing them from standard open exposure calculations to prevent inflated risk reporting.
+* **Executive Summary & Action Plans:** Generates contextual recommended actions assigned to respective business owners (e.g., Accounts Payable, Sourcing, Finance Controllers) with clear business impacts, timelines, and financial severity mapping.
+* **Premium Dark-Theme Interface:** Strict "Product" design register featuring high-density data tables, loading skeletons, smooth micro-animations, and interactive Recharts visualizations.
 
 ---
 
@@ -23,14 +23,14 @@ Built using a **Python Flask** backend and a modern **React (Vite + TailwindCSS)
 ### Backend
 * **Python 3.10+ / Flask:** Lightweight REST API.
 * **Pandas & NumPy:** Fast, vectorized data cleaning, joining, and aggregation.
-* **ReportLab:** Direct programmatic PDF generation for audit reports.
+* **Werkzeug:** Secure file upload handling.
 
 ### Frontend
 * **React 18 / Vite:** Ultra-fast bundler and component-based frontend shell.
-* **TailwindCSS:** Modern, utility-first CSS styling.
-* **Recharts:** Responsive SVG-based interactive charts.
-* **TanStack React Query & Axios:** Reliable state management and API integration.
-* **Framer Motion:** Smooth micro-animations and page transitions.
+* **TailwindCSS:** Modern, utility-first CSS styling strictly adhering to dark-mode product guidelines.
+* **Recharts:** Responsive SVG-based interactive charts (Bar, Line, Area).
+* **TanStack React Query & Axios:** Reliable state management, API integration, and cache invalidation.
+* **Lucide React:** Clean, consistent iconography.
 
 ---
 
@@ -38,22 +38,19 @@ Built using a **Python Flask** backend and a modern **React (Vite + TailwindCSS)
 
 ```text
 SyrmaSGS_DashBoard/
-├── backend/                   # Flask server entry point & uploaded file processing
-│   ├── app.py                 # Main Flask application with API endpoints
-│   └── core/                  # Core services imports
-├── services/                  # Business logic and analytical computation
-│   ├── grir_analytics_service.py # Main service containing reconciliation & KPI computation
-│   └── grir_kpi_builder.py    # Backup KPI calculations and helper methods
+├── backend/                   # Flask server entry point & API routes
+│   └── app.py                 # Main application mapping to analytics services
+├── services/                  # Core business logic and analytical computation
+│   ├── grir_analytics_service.py # Core service: cleans data, runs engine, generates analytics
 ├── frontend/                  # React dashboard frontend
-│   ├── src/                   # React source code (components, feature panels)
-│   │   ├── features/grir/     # Main dashboard feature files (GrirDashboard.jsx)
-│   │   └── index.css          # Design system stylesheet
-│   ├── package.json           # Frontend dependencies & npm scripts
-│   └── vite.config.js         # Vite configuration
-├── data/                      # Local storage and test data files
-├── test_*.py                  # Python integration & unit test suites
+│   ├── src/                   
+│   │   ├── features/grir/     # Core feature components (GrirDashboard.jsx)
+│   │   └── index.css          # Core design tokens and custom scrollbars
+│   ├── tailwind.config.js     # Typography (Outfit, JetBrains Mono) & Color definitions
+│   └── vite.config.js         # Vite bundler configuration
+├── grir_analysis.py           # Core pandas data processing scripts
 ├── requirements.txt           # Python backend dependencies
-└── Syrma_SGS_Power_BI_Report.pbix # Offline Power BI report file
+└── package.json               # Node frontend dependencies
 ```
 
 ---
@@ -68,31 +65,28 @@ SyrmaSGS_DashBoard/
 
 ### Backend Setup
 
-1. **Navigate to the root directory & create a Python Virtual Environment:**
-   ```bash
-   python -m venv venv
-   ```
-
-2. **Activate the Virtual Environment:**
+1. **Create and activate a Python Virtual Environment:**
    * **Windows (PowerShell):**
      ```powershell
+     python -m venv venv
      .\venv\Scripts\Activate.ps1
      ```
    * **macOS/Linux:**
      ```bash
+     python3 -m venv venv
      source venv/bin/activate
      ```
 
-3. **Install Dependencies:**
+2. **Install Dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
 
-4. **Run the Flask Development Server:**
+3. **Run the Flask Development Server:**
    ```bash
    python backend/app.py
    ```
-   The backend API will run on `http://127.0.0.1:5000`.
+   The backend API will run on `http://127.0.0.1:5000`. It configures CORS automatically to accept requests from the frontend.
 
 ---
 
@@ -116,24 +110,34 @@ SyrmaSGS_DashBoard/
 
 ---
 
-## 📊 Expected Data Formats
+## 🖥️ Usage Guide
 
-The dashboard requires three standard SAP exports:
-
-1. **GRIR Data:** Transactional history containing posting types, posting dates, PO numbers, item indices, debit/credit indicators, and document details.
-2. **EKKO Data:** Purchase Order header details, including purchase document IDs, vendor info, exchange rates, and PO currencies.
-3. **ME2N Data:** Purchase Order line-item tracking detailing order quantities, prices, open values, delivery dates, and open delivery/invoice quantities.
-
-*Note: The platform features an auto-detection system that dynamically aligns column headers containing varying abbreviations or aliases exported from SAP.*
+1. **Upload Dataset:** On launching the application, you will be presented with a dark-themed upload zone. Drag and drop your SAP GR/IR export file (`.csv`, `.xls`, or `.xlsx`) into the zone.
+2. **Analysis Pending State:** The dashboard will display an animating skeleton layout while the backend pandas engine processes the thousands of ledger lines.
+3. **Review KPIs:** Once loaded, the top row displays Total Open Exposure, Total IR Value, Actionable Exceptions (critical metric), Open PO Count, and Reversal Totals.
+4. **Analyze Trends:** Use the dual charts to track *Reconciliation Accuracy Trend* (Match Rate % over time) and the *Cumulative Ledger Value Trend*.
+5. **Drill Down into Actions:** Review the "Financial Statement Impact" and "Recommended Workflows" panels to see AI-generated escalation protocols and their associated financial severity.
+6. **Data Exploration:** Scroll down to the interactive data table to search by PO number, filter by status, or view explicit values for Type 7 and Type P metrics per line item.
 
 ---
 
-## 🧪 Running Tests
+## 🧪 Testing
 
-A suite of unit and integration test scripts is included to validate the data mappings, status classifications, and API routes.
+A comprehensive suite of unit and integration test scripts is included to validate the data mappings, status classifications, API routes, and calculation accuracy.
 
-To run the reconciliation tests:
+To run the test scripts from the project root:
+
 ```bash
-python test_reconciliation.py
-python test_upload_workflow.py
+# Core Reconciliation Logic
+python test_grir.py                # Main test suite for GR/IR data processing logic
+python test_reconciliation.py      # Validates specific PO matching algorithms
+
+# Data Classification & KPIs
+python test_actionable.py          # Verifies actionable exception logic (>90 days, over-invoiced)
+python cal_check.py                # Utility check for specific financial calculations
+
+# API & Workflows
+python test_endpoints.py           # Validates backend REST API endpoints
+python test_upload.py              # Tests basic file upload handling
+python test_upload_workflow.py     # End-to-end test of the upload and processing pipeline
 ```
