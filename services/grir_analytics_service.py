@@ -233,8 +233,7 @@ from grir_analysis import (
     build_vendor_insights, build_material_insights, build_plant_insights,
     build_price_variance, build_reversal_analysis, build_exceptions,
     build_recommended_actions, build_executive_summary, build_financial_impact,
-    classify_status, compute_risk, compute_row_risk, aging_bucket, explain,
-    calculate_group_risk_scores, generate_risk_flags, generate_deterministic_insights,
+    classify_status, aging_bucket, explain, generate_deterministic_insights,
     build_type_7p_analysis, build_time_series_analytics
 )
 class GRIRAnalyticsService:
@@ -453,10 +452,6 @@ class GRIRAnalyticsService:
         fin_imp = build_financial_impact(df, kpis)
         time_series = build_time_series_analytics(df)
 
-        vendor_risk = calculate_group_risk_scores(df, 'Vendor', total_open_exposure)
-        material_risk = calculate_group_risk_scores(df, 'Short Text', total_open_exposure)
-        plant_risk = calculate_group_risk_scores(df, 'Plant', total_open_exposure)
-        rule_based_risks = generate_risk_flags(df, total_open_exposure)
         deterministic_insights = generate_deterministic_insights(df, kpis, total_open_exposure)
 
         spend_by_vendor = df.groupby('Vendor')['Net_Order_Value_INR'].sum().reset_index().rename(columns={'Vendor': 'vendor', 'Net_Order_Value_INR': 'spend'}).sort_values('spend', ascending=False)
@@ -478,7 +473,7 @@ class GRIRAnalyticsService:
         all_items_cols = [
             'PO Number', 'PO Item', 'Vendor', 'Short Text', 'Plant', 'Material Group',
             'net_gr_qty', 'net_gr_val', 'net_ir_qty', 'net_ir_val',
-            'open_qty', 'open_val', 'status', 'risk_level', 'risk_score',
+            'open_qty', 'open_val', 'status',
             'aging_bucket', 'inv_completion_pct', 'reversal_pct',
             'price_var_pct', 'price_var_abs', 'days_open', 'posting_date', 'Currency',
         ]
@@ -547,11 +542,11 @@ class GRIRAnalyticsService:
                 'top_vendors_by_spend': spend_by_vendor.head(15).to_dict('records'),
                 'top_vendors_by_exposure': df.groupby('Vendor')['open_val'].agg(lambda x: round(float(x.abs().sum()), 2)).reset_index().rename(columns={'Vendor': 'vendor', 'open_val': 'exposure'}).sort_values('exposure', ascending=False).head(15).to_dict('records'),
                 'top_vendors_by_aging': df.groupby('Vendor')['days_open'].mean().reset_index().rename(columns={'Vendor': 'vendor', 'days_open': 'avg_days_open'}).fillna(0).sort_values('avg_days_open', ascending=False).head(15).to_dict('records'),
-                'vendor_risk_score': vendor_risk,
+
             },
             'material_analytics': {
                 'material_spend': df.groupby('Short Text')['Net_Order_Value_INR'].sum().reset_index().rename(columns={'Short Text': 'material', 'Net_Order_Value_INR': 'spend'}).sort_values('spend', ascending=False).to_dict('records'),
-                'material_risk_score': material_risk,
+
             },
             'aging': {
                 'buckets': aging,
@@ -562,12 +557,10 @@ class GRIRAnalyticsService:
                 'price_variance': price_var,
                 'variance_pct': round(float(df['price_var_pct'].abs().mean()), 2) if len(df) else 0.0,
             },
-            'risks': {
-                'rule_based_risks': rule_based_risks,
-            },
+
             'executive_summary': exec_sum,
             'charts': {
-                'risk_level': kpis.get('risk_distribution', {}),
+
                 'status': kpis.get('status_distribution', {}),
             },
             'vendor_insights': vendors,
@@ -590,7 +583,7 @@ class GRIRAnalyticsService:
         print(f"  Total PO Line Items  : {kpis['total_po_items']:,}")
         print(f"  Reconciliation Rate  : {kpis['reconciliation_rate']}%")
         print(f"  Total Open Value     : {kpis['total_open_value']:,.2f}")
-        print(f"  Critical Items       : {kpis['critical_items']}")
+        print(f"  Actionable Items     : {kpis['actionable_exceptions_count']}")
         print(f"  Unique Vendors       : {kpis['unique_vendors']}")
 
     def get_metadata(self):
@@ -623,7 +616,7 @@ class GRIRAnalyticsService:
         return output
 
     def get_items(self, page=1, limit=50, search='', status='', aging_days='',
-                  plant='', sortBy='risk_score', sortOrder='desc'):
+                  plant='', sortBy='open_val', sortOrder='desc'):
         if not self._output:
             return {'items': [], 'total': 0, 'page': 1, 'pages': 1, 'limit': limit}
 
@@ -665,16 +658,19 @@ class GRIRAnalyticsService:
         if sortBy:
             reverse = (sortOrder == 'desc')
             numeric_fields = ['net_gr_qty', 'net_gr_val', 'net_ir_qty', 'net_ir_val',
-                              'open_qty', 'open_val', 'risk_score', 'days_open', 'open_aging_days',
+                              'open_qty', 'open_val', 'days_open', 'open_aging_days',
                               'inv_completion_pct', 'reversal_pct', 'price_var_pct', 'price_var_abs']
 
             def get_sort_key(item):
                 val = item.get(sortBy)
                 if val is None:
-                    return 0 if sortBy in numeric_fields else ""
+                    return 0.0 if sortBy in numeric_fields else ""
                 if sortBy in numeric_fields:
                     try:
-                        return float(val)
+                        fval = float(val)
+                        if sortBy in ('open_val', 'open_qty', 'price_var_abs', 'price_var_pct'):
+                            return abs(fval)
+                        return fval
                     except (ValueError, TypeError):
                         return 0.0
                 return str(val).lower()
@@ -713,7 +709,7 @@ class GRIRAnalyticsService:
         return {
             'headline': exec_sum.get('headline', 'GR/IR Reconciliation Analysis'),
             'executive_summary': exec_sum.get('detail', ''),
-            'critical_risks': exec_sum.get('risk_flags', []),
+
             'vendor_findings': [
                 f"{v['vendor']}: Open exposure INR {v['open_value']:,.0f} ({v['open_pct_total']:.1f}% of total). "
                 f"Dominant status: {v['dominant_status']}. Avg days open: {v['avg_days_open']:.0f}d."
@@ -767,8 +763,7 @@ class GRIRAnalyticsService:
             actions = data.get('recommended_actions', [])
             fin_impact = data.get('financial_impact', [])
             price_var = data.get('price_variance_analysis', [])[:15]
-            risk_flags = data.get('risks', {}).get('rule_based_risks', [])[:10]
-            vendor_risk = data.get('vendor_analytics', {}).get('vendor_risk_score', [])[:10]
+
             recon_data = data.get('reconciliation', {})
             det_insights = data.get('deterministic_insights', [])
 
@@ -863,8 +858,8 @@ class GRIRAnalyticsService:
                  p("Pending Invoice Value"), p(fmt_inr(kpis.get('pending_invoice_val',0)))],
                 [p("Over-Invoice Risk"), p(fmt_inr(kpis.get('over_invoice_val',0))),
                  p("IR Control Violations"), p(fmt_inr(kpis.get('ir_only_val',0)))],
-                [p("Critical Items"), p(str(kpis.get('critical_items',0))),
-                 p("High Risk Items"), p(str(kpis.get('high_risk_items',0)))],
+                [p("Actionable Items"), p(str(kpis.get('actionable_exceptions_count',0))),
+                 p("Reconciled Count"), p(str(kpis.get('reconciled_count',0)))],
                 [p("Unique Vendors"), p(str(kpis.get('unique_vendors',0))),
                  p("Unique POs"), p(str(kpis.get('unique_pos',0)))],
             ]
@@ -898,30 +893,28 @@ class GRIRAnalyticsService:
             if vendor_list:
                 v_rows = [[p("Vendor", bold_style), p("POs", bold_style), p("GR Value", bold_style),
                            p("IR Value", bold_style), p("Open Value", bold_style),
-                           p("% Total", bold_style), p("Risk", bold_style)]]
+                           p("% Total", bold_style)]]
                 for v in vendor_list:
                     v_rows.append([
                         p(str(v.get('vendor', ''))[:40]), p(str(v.get('po_count', 0))),
                         p(fmt_inr(v.get('gr_value', 0))), p(fmt_inr(v.get('ir_value', 0))),
                         p(fmt_inr(v.get('open_value', 0))), p(f"{v.get('open_pct_total', 0):.1f}%"),
-                        p(v.get('risk_level', '')),
                     ])
-                story.append(mk_tbl(v_rows, [130, 30, 70, 70, 70, 45, 50]))
+                story.append(mk_tbl(v_rows, [180, 30, 70, 70, 70, 45]))
             story.append(PageBreak())
 
             story.append(Paragraph("5. Top Exceptions (Unreconciled Items)", h2_style))
             if exceptions:
                 ex_rows = [[p("PO / Item", bold_style), p("Vendor", bold_style),
                             p("Status", bold_style), p("Open Value", bold_style),
-                            p("Days Open", bold_style), p("Risk", bold_style)]]
+                            p("Days Open", bold_style)]]
                 for ex in exceptions:
                     ex_rows.append([
                         p(f"{ex.get('po_number','')}/{ex.get('po_item','')}"),
                         p(str(ex.get('vendor', ''))[:35]), p(ex.get('status', '')),
                         p(fmt_inr(ex.get('open_val', 0))), p(str(ex.get('days_open', 0))),
-                        p(ex.get('risk_level', '')),
                     ])
-                story.append(mk_tbl(ex_rows, [80, 120, 100, 80, 60, 60]))
+                story.append(mk_tbl(ex_rows, [80, 180, 100, 80, 60]))
             story.append(Spacer(1, 12))
 
             if det_insights:

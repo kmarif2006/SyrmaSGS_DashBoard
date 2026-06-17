@@ -50,13 +50,6 @@ const STATUS_COLORS = {
   'Review Required': '#06b6d4', // Cyan
 }
 
-const RISK_COLORS = {
-  'CRITICAL': '#ef4444', // Red
-  'HIGH': '#f97316',     // Orange
-  'MEDIUM': '#eab308',   // Yellow
-  'LOW': '#10b981',      // Emerald
-}
-
 function GrirKPICard({ title, value, sub, icon: Icon, colorClass, isLoading, tooltip, description }) {
   return (
     <div className="glass-card-hover p-6 flex items-start justify-between" title={tooltip}>
@@ -231,7 +224,7 @@ export default function GrirDashboard() {
   const [statusFilter, setStatusFilter] = useState('')
   const [agingDaysFilter, setAgingDaysFilter] = useState('')
   const [plantFilter, setPlantFilter] = useState('')
-  const [sortBy, setSortBy] = useState('risk_score')
+  const [sortBy, setSortBy] = useState('open_val')
   const [sortOrder, setSortOrder] = useState('desc')
   const [limit, setLimit] = useState(25)
 
@@ -322,14 +315,6 @@ export default function GrirDashboard() {
       name: status,
       count: count,
       fill: STATUS_COLORS[status] || '#cbd5e1'
-    }))
-  }, [summary])
-
-  const riskChartData = useMemo(() => {
-    if (!summary?.kpis?.risk_distribution) return []
-    return Object.entries(summary.kpis.risk_distribution).map(([risk, count]) => ({
-      name: risk,
-      value: count
     }))
   }, [summary])
 
@@ -692,7 +677,7 @@ export default function GrirDashboard() {
         </div>
 
         {/* Major Exceptions Drawer List */}
-        {summary?.top_exceptions?.length > 0 && (
+        {(summary?.top_exceptions?.length > 0 || showLoading) && (
           <div className="glass-card p-6">
             <div className="mb-6 flex justify-between items-center">
               <div className="flex items-center gap-3">
@@ -719,31 +704,44 @@ export default function GrirDashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/50">
-                  {summary.top_exceptions.map((item, idx) => (
-                    <tr key={idx} className="hover:bg-slate-900/30 transition-colors">
-                      <td className="py-3.5 pr-4 font-mono font-bold text-slate-200">
-                        {item.po_number} / {item.po_item}
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-300 max-w-[150px] truncate">{item.vendor}</td>
-                      <td className="py-3.5 px-4 text-slate-400 max-w-[180px] truncate">{item.material}</td>
-                      <td className="py-3.5 px-4 text-center">
-                        <span className={`px-2 py-0.5 rounded font-black tracking-widest text-[9px] uppercase border ${
-                          item.status === 'GR ONLY' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
-                          item.status === 'IR ONLY' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' :
-                          item.status === 'OVER INVOICED' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
-                          item.status === 'PRICE VARIANCE' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
-                        }`}>
-                          {item.status}
-                        </span>
-                      </td>
-                      <td className={`py-3.5 px-4 text-right font-bold font-mono ${item.open_val < 0 ? 'text-red-400' : 'text-slate-300'}`}>
-                        {formatINR(item.open_val)}
-                      </td>
-                      <td className="py-3.5 pl-4 text-slate-400 leading-normal italic text-[11px] max-w-[320px]">
-                        {item.explanation}
-                      </td>
-                    </tr>
-                  ))}
+                  {showLoading ? (
+                    [1, 2, 3, 4, 5].map(i => (
+                      <tr key={i}>
+                        <td className="py-3.5 pr-4"><SkeletonBlock className="h-4 w-24" /></td>
+                        <td className="py-3.5 px-4"><SkeletonBlock className="h-4 w-32" /></td>
+                        <td className="py-3.5 px-4"><SkeletonBlock className="h-4 w-40" /></td>
+                        <td className="py-3.5 px-4"><SkeletonBlock className="h-5 w-20 mx-auto" /></td>
+                        <td className="py-3.5 px-4"><SkeletonBlock className="h-4 w-24 ml-auto" /></td>
+                        <td className="py-3.5 pl-4"><SkeletonBlock className="h-4 w-full" /></td>
+                      </tr>
+                    ))
+                  ) : (
+                    summary?.top_exceptions?.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-slate-900/30 transition-colors">
+                        <td className="py-3.5 pr-4 font-mono font-bold text-slate-200">
+                          {item.po_number} / {item.po_item}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-300 max-w-[150px] truncate">{item.vendor}</td>
+                        <td className="py-3.5 px-4 text-slate-400 max-w-[180px] truncate">{item.material}</td>
+                        <td className="py-3.5 px-4 text-center">
+                          <span className={`px-2 py-0.5 rounded font-black tracking-widest text-[9px] uppercase border ${
+                            item.status === 'GR Done / IR Pending' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                            item.status === 'IR Done / GR Pending' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' :
+                            item.status === 'Invoice Greater Than GR' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+                            item.status === 'GR Greater Than Invoice' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+                          }`}>
+                            {item.status}
+                          </span>
+                        </td>
+                        <td className={`py-3.5 px-4 text-right font-bold font-mono ${item.open_val < 0 ? 'text-red-400' : 'text-slate-300'}`}>
+                          {formatINR(item.open_val)}
+                        </td>
+                        <td className="py-3.5 pl-4 text-slate-400 leading-normal italic text-[11px] max-w-[320px]">
+                          {item.explanation}
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1063,17 +1061,6 @@ export default function GrirDashboard() {
               <RefreshCw size={20} />
             </div>
           </div>
-          <div className="glass-card p-5 space-y-1 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Operational Risks</p>
-              <p className="text-sm font-bold text-slate-300 mt-1">
-                High reversal rates signal posting errors, inventory corrections, or vendor invoice disputes.
-              </p>
-            </div>
-            <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-xl">
-              <AlertTriangle size={20} />
-            </div>
-          </div>
         </div>
 
         <div className="glass-card p-6">
@@ -1191,13 +1178,12 @@ export default function GrirDashboard() {
                   <th className="pb-3 px-4 text-right">Net IR Value</th>
                   <th className="pb-3 px-4 text-center">Variance %</th>
                   <th className="pb-3 px-4 text-right">Variance Absolute</th>
-                  <th className="pb-3 pl-4 text-center">Risk</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50 text-slate-300 font-medium">
                 {variances.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-8 text-center text-slate-500 font-bold">No compliance price variances detected.</td>
+                    <td colSpan={8} className="py-8 text-center text-slate-500 font-bold">No compliance price variances detected.</td>
                   </tr>
                 ) : (
                   variances.map((v, idx) => (
@@ -1219,13 +1205,6 @@ export default function GrirDashboard() {
                       </td>
                       <td className={`py-3.5 px-4 text-right font-mono font-bold ${v.variance_abs > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
                         {formatINR(v.variance_abs)}
-                      </td>
-                      <td className="py-3.5 pl-4 text-center">
-                        <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-black tracking-widest uppercase border ${
-                          v.risk_level === 'HIGH' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                        }`}>
-                          {v.risk_level}
-                        </span>
                       </td>
                     </tr>
                   ))

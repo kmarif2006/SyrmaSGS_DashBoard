@@ -309,76 +309,6 @@ def classify_status(row):
 
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# RULE-BASED RISK SCORING (No opaque AI scoring)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def compute_risk(status, open_val, bucket, rev_pct, pv_pct):
-    score = 0
-    status_map = {
-        'FULLY RECONCILED': 0, 'FULLY REVERSED': 0, 'CLOSED': 0,
-        'PARTIALLY REVERSED': 15, 'PARTIALLY INVOICED': 25,
-        'GR ONLY': 40, 'IR ONLY': 55, 'PRICE VARIANCE': 35,
-        'OVER INVOICED': 65, 'CRITICAL EXCEPTION': 85,
-    }
-    score += status_map.get(status, 20)
-
-    av = abs(open_val)
-    if av > 5000000:   score += 30
-    elif av > 1000000: score += 20
-    elif av > 500000:  score += 12
-    elif av > 100000:  score += 6
-
-    age_map = {'0-30': 0, '31-60': 5, '61-90': 12, '91-180': 20, '181-365': 30, '365+': 40}
-    score += age_map.get(bucket, 0)
-
-    if abs(pv_pct) > 20: score += 15
-    elif abs(pv_pct) > 10: score += 8
-
-    if rev_pct > 50: score += 10
-
-    score = min(score, 100)
-    if score >= 70: level = 'CRITICAL'
-    elif score >= 50: level = 'HIGH'
-    elif score >= 30: level = 'MEDIUM'
-    else: level = 'LOW'
-    return score, level
-
-
-def compute_row_risk(row, reconciled):
-    if reconciled or row['status'] in ('FULLY RECONCILED', 'FULLY REVERSED'):
-        return 0, 'LOW'
-
-    score = 0
-    status_map = {
-        'GR ONLY': 35, 'IR ONLY': 50, 'PARTIALLY INVOICED': 20,
-        'OVER INVOICED': 60, 'PRICE VARIANCE': 30, 'PARTIALLY REVERSED': 10
-    }
-    score += status_map.get(row['status'], 15)
-
-    days_open = row.get('days_open')
-    if pd.notna(days_open):
-        if days_open > 90:   score += 30
-        elif days_open > 60: score += 20
-        elif days_open > 30: score += 10
-
-    price_var_pct = abs(row.get('price_var_pct', 0.0))
-    if price_var_pct > 10:   score += 10
-    elif price_var_pct > 5:  score += 5
-
-    av = abs(row.get('open_val', 0.0))
-    if av > 1000000:   score += 10
-    elif av > 100000:  score += 5
-
-    score = min(max(int(score), 0), 100)
-
-    if score >= 75:   level = 'CRITICAL'
-    elif score >= 50: level = 'HIGH'
-    elif score >= 25: level = 'MEDIUM'
-    else:             level = 'LOW'
-
-    return score, level
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NARRATIVE GENERATION
@@ -714,44 +644,6 @@ def reconcile(grir, me2n, ekko, analysis_date=None):
     if 'Exchange Rate' not in agg_df.columns:
         agg_df['Exchange Rate'] = 1.0
 
-    # Risk scoring (Legacy compatibility using 0-100 scale)
-    _status = agg_df['Status'].fillna('')
-    _av = agg_df['Open_Val_INR'].abs()
-    _bucket = agg_df['Aging_Bucket'].fillna('')
-    _pv_pct = agg_df['price_var_pct'].abs()
-    _rev_pct = agg_df['reversal_pct']
-
-    status_map = {
-        'FULLY RECONCILED': 0, 'FULLY REVERSED': 0, 'CLOSED': 0,
-        'PARTIALLY REVERSED': 15, 'PARTIALLY INVOICED': 25,
-        'GR ONLY': 40, 'IR ONLY': 55, 'PRICE VARIANCE': 35,
-        'OVER INVOICED': 65, 'CRITICAL EXCEPTION': 85,
-    }
-    _score = _status.map(status_map).fillna(20)
-
-    _score += np.select(
-        [_av > 5000000, _av > 1000000, _av > 500000, _av > 100000],
-        [30, 20, 12, 6],
-        default=0
-    )
-
-    age_map = {'0-30': 0, '31-60': 5, '61-90': 12, '91-180': 20, '181-365': 30, '365+': 40}
-    _score += _bucket.map(age_map).fillna(0)
-
-    _score += np.select([_pv_pct > 20, _pv_pct > 10], [15, 8], default=0)
-    _score += np.where(_rev_pct > 50, 10, 0)
-
-    _score = np.clip(_score, 0, 100)
-    
-    _level = np.select(
-        [_score >= 70, _score >= 50, _score >= 30],
-        ['CRITICAL', 'HIGH', 'MEDIUM'],
-        default='LOW'
-    )
-
-    agg_df['risk_score'] = _score
-    agg_df['risk_level'] = _level
-        
     print(f"  Reconciliation complete: {len(agg_df):,} PO line items")
     return agg_df
 
@@ -783,7 +675,6 @@ def build_kpis(df, ekko=None):
     status_dist_init.update(status_counts)
     status_dist = status_dist_init
 
-    risk_dist   = df['risk_level'].value_counts().to_dict()
 
     pending_invoice_val = df[df['Status'].isin(['GR Done / IR Pending', 'GR Greater Than Invoice'])]['Open_Exposure_INR'].sum()
     over_inv_val        = df[df['Status'].isin(['IR Done / GR Pending', 'Invoice Greater Than GR'])]['Open_Exposure_INR'].sum()
@@ -822,16 +713,13 @@ def build_kpis(df, ekko=None):
         'open_item_count':       int(total_items - recon_count),
         'actionable_exceptions_count': actionable_exceptions_count,
         'actionable_exceptions_val': actionable_exceptions_val,
-        'critical_items':        int((df['risk_level'] == 'CRITICAL').sum()),
-        'high_risk_items':       int((df['risk_level'] == 'HIGH').sum()),
-        'medium_risk_items':     int((df['risk_level'] == 'MEDIUM').sum()),
-        'low_risk_items':        int((df['risk_level'] == 'LOW').sum()),
+
         'pending_invoice_val':   round(float(pending_invoice_val), 2),
         'over_invoice_val':      round(float(over_inv_val), 2),
         'ir_only_val':           round(float(ir_only_val), 2),
         'total_reversals_val':   round(float(total_reversals_val), 2),
         'status_distribution':   {k: int(v) for k, v in status_dist.items()},
-        'risk_distribution':     {k: int(v) for k, v in risk_dist.items()},
+
         'unique_vendors':        int(df['Vendor'].nunique()),
         'unique_pos':            int(df['PO Number'].nunique()),
         'unique_plants':         int(df['Plant'].nunique()),
@@ -868,141 +756,7 @@ def build_aging(df):
     return result
 
 
-def calculate_group_risk_scores(df, group_col, total_open_exposure):
-    groups = []
-    total_exposure = max(total_open_exposure, 1.0)
-    
-    for name, gdf in df.groupby(group_col):
-        if not name or pd.isna(name) or str(name).strip() in ('', 'nan', 'None'):
-            continue
-            
-        grp_exposure = gdf['exposure_val'].sum()
-        exposure_pct = grp_exposure / total_exposure * 100
-        if grp_exposure == 0:
-            exp_score = 0
-        elif exposure_pct < 5:
-            exp_score = 25
-        elif exposure_pct < 10:
-            exp_score = 50
-        elif exposure_pct < 20:
-            exp_score = 75
-        else:
-            exp_score = 100
-            
-        avg_days = gdf['days_open'].dropna().mean()
-        if pd.isna(avg_days) or avg_days == 0:
-            age_score = 0
-        elif avg_days <= 30:
-            age_score = 25
-        elif avg_days <= 60:
-            age_score = 50
-        elif avg_days <= 90:
-            age_score = 75
-        else:
-            age_score = 100
-            
-        recon_rate = gdf['reconciled'].sum() / len(gdf) * 100
-        recon_failure_rate = 100 - recon_rate
-        if recon_failure_rate == 0:
-            recon_score = 0
-        elif recon_failure_rate < 5:
-            recon_score = 25
-        elif recon_failure_rate < 10:
-            recon_score = 50
-        elif recon_failure_rate < 20:
-            recon_score = 75
-        else:
-            recon_score = 100
-            
-        avg_var = gdf['price_var_pct'].abs().mean()
-        if pd.isna(avg_var) or avg_var == 0:
-            var_score = 0
-        elif avg_var < 2:
-            var_score = 25
-        elif avg_var < 5:
-            var_score = 50
-        elif avg_var < 10:
-            var_score = 75
-        else:
-            var_score = 100
-            
-        if group_col == 'Plant':
-            score = 0.40 * exp_score + 0.30 * age_score + 0.30 * recon_score
-        else:
-            score = 0.40 * exp_score + 0.30 * age_score + 0.20 * recon_score + 0.10 * var_score
-            
-        score = min(max(round(score), 0), 100)
-        
-        if score >= 76:     risk_level = 'CRITICAL'
-        elif score >= 51:   risk_level = 'HIGH'
-        elif score >= 26:   risk_level = 'MEDIUM'
-        else:               risk_level = 'LOW'
-            
-        key_name = 'material' if group_col in ('Short Text', 'material_key', 'material_label') else group_col.lower()
-        groups.append({
-            key_name: str(name),
-            'exposure': round(float(grp_exposure), 2),
-            'avg_days_open': round(float(avg_days), 1) if not pd.isna(avg_days) else 0.0,
-            'recon_rate': round(float(recon_rate), 1),
-            'avg_price_variance': round(float(avg_var), 1) if not pd.isna(avg_var) else 0.0,
-            'score': score,
-            'risk_level': risk_level
-        })
-        
-    return sorted(groups, key=lambda x: x['exposure'], reverse=True)
 
-
-def generate_risk_flags(df, total_open_exposure):
-    flags = []
-    total_exposure = max(total_open_exposure, 1.0)
-    high_crit_df = df[df['risk_level'].isin(['HIGH', 'CRITICAL'])]
-    
-    for row in high_crit_df.to_dict('records'):
-        line_exposure = abs(row['open_val'])
-        exp_pct = line_exposure / total_exposure * 100
-        
-        vendor = row.get('Vendor', 'Unknown Vendor')
-        material = row.get('Short Text', 'Unknown Material')
-        plant = row.get('Plant', 'Unknown Plant')
-        po = f"{row['PO Number']} / {row['PO Item']}"
-        
-        reasons = []
-        rec_action = ""
-        
-        if row['status'] == 'Invoice Greater Than GR':
-            reasons.append(f"Excess invoicing: Invoice receipt exceeds Goods receipt by {abs(row['open_qty']):.1f} units")
-            rec_action = "Block payment immediately, investigate duplicate invoicing or billing error."
-        elif row['status'] == 'IR Done / GR Pending':
-            reasons.append("Three-way match failure: Invoice receipt posted without goods receipt")
-            rec_action = "Block payment until goods receipt is verified and posted."
-        elif row['status'] == 'GR Done / IR Pending' and row['days_open'] > 90:
-            reasons.append(f"Aged Goods Receipt: Goods received but no invoice posted for {row['days_open']} days")
-            rec_action = "Contact supplier to request invoice or clear accrual balance."
-            
-        if abs(row['price_var_pct']) > 10:
-            reasons.append(f"Price compliance variance: {row['price_var_pct']:.1f}% deviation from PO net price")
-            rec_action = "Verify purchase agreement, issue supplier debit note for excess amount."
-            
-        if not reasons:
-            reasons.append(f"Reconciliation discrepancy with status {row['status']} and exposure of INR {line_exposure:,.2f}")
-            rec_action = "Review ledger entries and align with supplier statement."
-            
-        flags.append({
-            'po': po,
-            'vendor': str(vendor),
-            'material': str(material),
-            'plant': str(plant),
-            'risk_level': row['risk_level'],
-            'risk_score': int(row['risk_score']),
-            'risk_category': row['status'],
-            'business_rule_triggered': "; ".join(reasons),
-            'threshold': "Various rule boundaries (>60d, >5% variance, >0 tolerance for IR-only/over-invoice)",
-            'actual_value': f"Exposure: INR {line_exposure:,.2f}, Days open: {row['days_open']}, Price var: {row['price_var_pct']:.1f}%",
-            'source_dataset': "GRIR, ME2N, EKKO",
-            'recommended_action': rec_action
-        })
-        
-    return flags
 
 
 def generate_deterministic_insights(df, kpis, total_open_exposure):
@@ -1096,7 +850,6 @@ def build_vendor_insights(df):
         v_open = vdf['open_val'].sum()
         v_gr   = vdf['net_gr_val'].sum()
         v_ir   = vdf['net_ir_val'].sum()
-        exc    = int((vdf['risk_level'].isin(['CRITICAL','HIGH'])).sum())
         top_status = vdf['status'].mode().iloc[0] if len(vdf) > 0 else ''
         avg_rev    = float(vdf['reversal_pct'].mean())
         avg_days   = float(vdf['days_open'].dropna().mean()) if vdf['days_open'].dropna().any() else 0
@@ -1111,9 +864,8 @@ def build_vendor_insights(df):
             'open_pct_total':   round(float(v_open / total_open * 100 if total_open else 0), 1),
             'avg_reversal_pct': round(avg_rev, 1),
             'avg_days_open':    round(avg_days, 0),
-            'exception_count':  exc,
+            'exception_count':  0,
             'dominant_status':  str(top_status),
-            'risk_level':       str(vdf['risk_level'].mode().iloc[0]) if len(vdf) else 'LOW',
             'pending_invoice':  round(float(vdf[vdf['status'].isin(['GR Done / IR Pending','GR Greater Than Invoice'])]['open_val'].sum()), 2),
             'over_invoiced':    round(float(vdf[vdf['status'].isin(['IR Done / GR Pending','Invoice Greater Than GR'])]['open_val'].abs().sum()), 2),
         })
@@ -1148,7 +900,6 @@ def build_plant_insights(df):
         p_gr     = pdf['net_gr_val'].sum()
         p_ir     = pdf['net_ir_val'].sum()
         recon_r  = (pdf['status'] == 'FULLY RECONCILED').sum() / len(pdf) * 100 if len(pdf) else 0
-        exc_rate = (pdf['risk_level'].isin(['CRITICAL','HIGH'])).sum() / len(pdf) * 100 if len(pdf) else 0
         plants.append({
             'plant':              str(plant),
             'item_count':         int(len(pdf)),
@@ -1157,13 +908,13 @@ def build_plant_insights(df):
             'ir_value':           round(float(p_ir), 2),
             'open_pct_total':     round(float(p_open / total_open * 100 if total_open else 0), 1),
             'reconciliation_rate':round(float(recon_r), 1),
-            'exception_rate':     round(float(exc_rate), 1),
-            'critical_count':     int((pdf['risk_level'] == 'CRITICAL').sum()),
+            'exception_rate':     0.0,
+            'critical_count':     0,
         })
     return sorted(plants, key=lambda x: abs(x['open_value']), reverse=True)
 
 
-def build_plant_analytics(df, plant_risk, total_open_exposure):
+def build_plant_analytics(df, total_open_exposure):
     """Dedicated plant analytics section per API contract."""
     spend = df.groupby('Plant')['Net_Order_Value_INR'].sum().reset_index().rename(
         columns={'Plant': 'plant', 'Net_Order_Value_INR': 'spend'}
@@ -1182,7 +933,6 @@ def build_plant_analytics(df, plant_risk, total_open_exposure):
         'plant_exposure': exposure.to_dict('records'),
         'plant_aging': aging.to_dict('records'),
         'plant_variance': variance.to_dict('records'),
-        'plant_risk_score': plant_risk,
         'top_plants': spend.head(15).to_dict('records'),
         'plant_concentration': round(
             float(spend['spend'].max() / spend['spend'].sum() * 100), 1
@@ -1205,7 +955,6 @@ def build_price_variance(df):
             'gr_value':   round(float(row['net_gr_val']), 2),
             'variance_pct': round(float(row['price_var_pct']), 2),
             'variance_abs': round(float(row['price_var_abs']), 2),
-            'risk_level': 'HIGH' if abs(row['price_var_pct']) > 15 else 'MEDIUM',
         })
     return result
 
@@ -1248,8 +997,6 @@ def build_exceptions(df):
             'open_qty':     round(float(row['open_qty']), 2),
             'net_gr_val':   round(float(row['net_gr_val']), 2),
             'net_ir_val':   round(float(row['net_ir_val']), 2),
-            'risk_score':   int(row['risk_score']),
-            'risk_level':   str(row['risk_level']),
             'aging_bucket': str(row['aging_bucket']),
             'inv_completion_pct': round(float(row['inv_completion_pct']), 1),
             'reversal_pct': round(float(row['reversal_pct']), 1),
@@ -1263,7 +1010,7 @@ def build_exceptions(df):
 def build_recommended_actions(df, kpis):
     actions = []
 
-    gr_only = df[df['status'] == 'GR ONLY']
+    gr_only = df[df['status'] == 'GR Done / IR Pending']
     if len(gr_only):
         actions.append({
             'priority':   'HIGH',
@@ -1274,7 +1021,7 @@ def build_recommended_actions(df, kpis):
             'timeline':   'Within 7 business days',
         })
 
-    ir_only = df[df['status'] == 'IR ONLY']
+    ir_only = df[df['status'] == 'IR Done / GR Pending']
     if len(ir_only):
         actions.append({
             'priority':   'CRITICAL',
@@ -1285,7 +1032,7 @@ def build_recommended_actions(df, kpis):
             'timeline':   'Immediate — escalate to Finance Controller',
         })
 
-    over_inv = df[df['status'] == 'OVER INVOICED']
+    over_inv = df[df['status'] == 'Invoice Greater Than GR']
     if len(over_inv):
         actions.append({
             'priority':   'CRITICAL',
@@ -1296,7 +1043,7 @@ def build_recommended_actions(df, kpis):
             'timeline':   'Within 3 business days',
         })
 
-    old_items = df[df['aging_bucket'].isin(['91-180','180+']) & (~df['reconciled']) & (df['open_val'].abs() > 1000)]
+    old_items = df[df['aging_bucket'].isin(['91-180','181-365','365+']) & (~df['reconciled']) & (df['open_val'].abs() > 1000)]
     if len(old_items):
         actions.append({
             'priority':   'HIGH',

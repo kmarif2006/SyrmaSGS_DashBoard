@@ -706,11 +706,13 @@ def grir_items():
     limit = int(request.args.get("limit", 50))
     search = request.args.get("search", "").strip()
     status = request.args.get("status", "").strip()
-    risk_level = request.args.get("risk_level", "").strip()
+    aging_days = request.args.get("aging_days", "").strip()
     plant = request.args.get("plant", "").strip()
-    sort_by = request.args.get("sortBy", "risk_score").strip()
+    sort_by = request.args.get("sortBy", "open_val").strip()
+    if sort_by == "risk_score":
+        sort_by = "open_val"
     sort_order = request.args.get("sortOrder", "desc").strip()
-    result = grir_service.get_items(page, limit, search, status, risk_level, plant, sort_by, sort_order)
+    result = grir_service.get_items(page, limit, search, status, aging_days, plant, sort_by, sort_order)
     return jsonify(result)
 
 
