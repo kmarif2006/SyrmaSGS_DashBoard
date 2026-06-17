@@ -1,7 +1,5 @@
 # Syrma SGS — GR/IR Reconciliation & Procurement Analytics Platform
-
-An enterprise-grade, full-stack analytical platform designed for automated reconciliation of **Goods Receipt / Invoice Receipt (GR/IR)** account balances, procurement risk profiling, and audit reporting.
-
+An enterprise-grade, full-stack analytical platform designed for automated reconciliation of **Goods Receipt / Invoice Receipt (GR/IR)** account balances and audit reporting.
 Built using a **Python Flask** backend and a modern **React (Vite + TailwindCSS)** frontend, the dashboard processes SAP exports to instantly surface discrepancies, aging exposure, financial impact, and recommended action plans.
 
 ---
@@ -116,7 +114,7 @@ SyrmaSGS_DashBoard/
 2. **Analysis Pending State:** The dashboard will display an animating skeleton layout while the backend pandas engine processes the thousands of ledger lines.
 3. **Review KPIs:** Once loaded, the top row displays Total Open Exposure, Total IR Value, Actionable Exceptions (critical metric), Open PO Count, and Reversal Totals.
 4. **Analyze Trends:** Use the dual charts to track *Reconciliation Accuracy Trend* (Match Rate % over time) and the *Cumulative Ledger Value Trend*.
-5. **Drill Down into Actions:** Review the "Financial Statement Impact" and "Recommended Workflows" panels to see AI-generated escalation protocols and their associated financial severity.
+5. **Drill Down into Actions:** Review the "Financial Statement Impact" and "Recommended Workflows" panels to see concrete, rule-based escalation protocols and their associated financial severity.
 6. **Data Exploration:** Scroll down to the interactive data table to search by PO number, filter by status, or view explicit values for Type 7 and Type P metrics per line item.
 
 ---
