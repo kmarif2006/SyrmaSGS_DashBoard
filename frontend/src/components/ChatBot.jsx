@@ -46,7 +46,7 @@ export default function ChatBot({ filters }) {
       setMessages(prev => [...prev, { role: 'assistant', content: res.reply }])
     } catch (err) {
       console.error(err)
-      setError("Failed to fetch response. Make sure local Ollama is running and has the 'qwen3:8b' model.")
+      setError("Failed to fetch response. Make sure the local or remote Ollama server is running and the model is pulled.")
     } finally {
       setIsLoading(false)
     }
@@ -101,7 +101,7 @@ export default function ChatBot({ filters }) {
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                     </span>
                   </h3>
-                  <p className="text-[10px] text-slate-400 font-medium">Qwen 3:8b Online</p>
+                  <p className="text-[10px] text-slate-400 font-medium">LLM Online</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">

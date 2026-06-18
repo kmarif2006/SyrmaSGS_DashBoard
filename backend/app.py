@@ -632,9 +632,12 @@ Guidelines:
             "content": msg.get("content")
         })
     messages.append({"role": "user", "content": user_message})
+    import os
+    ollama_model = os.environ.get("OLLAMA_MODEL", "qwen3:8b")
+    ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
 
     payload = {
-        "model": "qwen3:8b",
+        "model": ollama_model,
         "messages": messages,
         "stream": False
     }
@@ -645,7 +648,7 @@ Guidelines:
         import urllib.error
 
         req = urllib.request.Request(
-            "http://localhost:11434/api/chat",
+            ollama_url,
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST"
@@ -657,7 +660,7 @@ Guidelines:
     except urllib.error.URLError as e:
         print(f"Ollama connection error: {e}")
         return jsonify({
-            "reply": "I couldn't connect to your local Ollama server. Please verify that Ollama is running and has the `qwen3:8b` model pulled (`ollama run qwen3:8b`)."
+            "reply": f"I couldn't connect to the Ollama server at {ollama_url}. Please verify that Ollama is running and has the `{ollama_model}` model pulled (`ollama run {ollama_model}`)."
         })
     except Exception as e:
         traceback.print_exc()
