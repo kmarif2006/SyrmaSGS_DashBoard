@@ -752,6 +752,21 @@ export default function GrirDashboard() {
   }
 
   const renderVendors = () => {
+    if (showLoading) {
+      return (
+        <div className="space-y-6 animate-fadeIn">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <SkeletonBlock className="h-32 w-full" />
+            <SkeletonBlock className="h-32 w-full" />
+            <SkeletonBlock className="h-32 w-full" />
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <SkeletonBlock className="h-[350px] w-full xl:col-span-1" />
+            <SkeletonBlock className="h-[350px] w-full xl:col-span-2" />
+          </div>
+        </div>
+      )
+    }
     const vendors = summary?.vendor_insights || []
 
     return (
@@ -899,6 +914,13 @@ export default function GrirDashboard() {
   }
 
   const renderMaterials = () => {
+    if (showLoading) {
+      return (
+        <div className="space-y-6 animate-fadeIn">
+          <SkeletonBlock className="h-[500px] w-full" />
+        </div>
+      )
+    }
     const materials = summary?.material_insights || []
 
     return (
@@ -964,6 +986,24 @@ export default function GrirDashboard() {
   }
 
   const renderAging = () => {
+    if (showLoading) {
+      return (
+        <div className="space-y-6 animate-fadeIn">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <SkeletonBlock className="h-28 w-full" />
+            <SkeletonBlock className="h-28 w-full" />
+            <SkeletonBlock className="h-28 w-full" />
+            <SkeletonBlock className="h-28 w-full" />
+            <SkeletonBlock className="h-28 w-full" />
+            <SkeletonBlock className="h-28 w-full" />
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <SkeletonBlock className="h-[400px] w-full xl:col-span-2" />
+            <SkeletonBlock className="h-[400px] w-full xl:col-span-1" />
+          </div>
+        </div>
+      )
+    }
     const agingData = summary?.aging_analysis || []
 
     return (
@@ -1043,6 +1083,16 @@ export default function GrirDashboard() {
   }
 
   const renderReversals = () => {
+    if (showLoading) {
+      return (
+        <div className="space-y-6 animate-fadeIn">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <SkeletonBlock className="h-28 w-full" />
+          </div>
+          <SkeletonBlock className="h-[500px] w-full" />
+        </div>
+      )
+    }
     const reversals = summary?.reversal_analysis || []
 
     return (
@@ -1129,6 +1179,17 @@ export default function GrirDashboard() {
   }
 
   const renderPriceVariance = () => {
+    if (showLoading) {
+      return (
+        <div className="space-y-6 animate-fadeIn">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <SkeletonBlock className="h-28 w-full" />
+            <SkeletonBlock className="h-28 w-full" />
+          </div>
+          <SkeletonBlock className="h-[500px] w-full" />
+        </div>
+      )
+    }
     const variances = summary?.price_variance_analysis || []
 
     return (
@@ -1550,6 +1611,20 @@ export default function GrirDashboard() {
   }
 
   const renderIsolated7P = () => {
+    if (showLoading) {
+      return (
+        <div className="space-y-6 animate-fadeIn">
+          <div className="flex items-center justify-between mb-4">
+            <SkeletonBlock className="h-10 w-1/3" />
+            <div className="flex gap-4">
+              <SkeletonBlock className="h-16 w-24" />
+              <SkeletonBlock className="h-16 w-24" />
+            </div>
+          </div>
+          <SkeletonBlock className="h-[400px] w-full" />
+        </div>
+      )
+    }
     const data = summary?.isolated_type_7p
     if (!data || !data.items || data.items.length === 0) {
       return (
