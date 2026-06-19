@@ -82,9 +82,41 @@ SyrmaSGS_DashBoard/
 
 3. **Run the Flask Development Server:**
    ```bash
-   python backend/app.py
+   python app.py
    ```
    The backend API will run on `http://127.0.0.1:5000`. It configures CORS automatically to accept requests from the frontend.
+
+4. **Install & Configure Local LLM (Ollama) for Chatbot (Optional):**
+   The dashboard includes an AI Assistant that analyzes the dataset. It requires [Ollama](https://ollama.com/) to run local models.
+   
+   **Step 1: Install Ollama**
+   Download and install Ollama for your operating system from the [official website](https://ollama.com/download).
+
+   **Step 2: Pull the Model**
+   Open a terminal and pull the default model:
+   ```bash
+   ollama run qwen3:8b
+   ```
+
+   **Step 3: Customizing the Model / Host**
+   You can override the model and URL via environment variables. This is especially useful for **laptops without a dedicated GPU**.
+
+   **For Laptops without GPUs (CPU-only):**
+   Use smaller, highly optimized models like `gemma4-e2b-qat`, `llama3.2:1b`, or `phi3:mini`.
+   *Windows (PowerShell):*
+   ```powershell
+   $env:OLLAMA_MODEL="llama3.2:1b"
+   $env:OLLAMA_URL="http://localhost:11434/api/chat"
+   python backend/app.py
+   ```
+   
+   **For Centralized GPU Servers:**
+   If Ollama is hosted centrally on a powerful machine, point your local dashboard to it:
+   *Windows (PowerShell):*
+   ```powershell
+   $env:OLLAMA_URL="http://<SERVER_IP>:11434/api/chat"
+   python backend/app.py
+   ```
 
 ---
 

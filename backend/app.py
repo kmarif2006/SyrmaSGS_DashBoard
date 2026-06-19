@@ -71,8 +71,10 @@ def upload_transactions():
     if not file.filename.lower().endswith(".csv"):
         return jsonify({"error": "Only .csv files are accepted"}), 400
     try:
-        # Save to disk as me2n.csv, gracefully handle permission errors if file is locked
-        file_path = os.path.join(PROJECT_ROOT, "me2n.csv")
+        # Save to disk in data/uploads as me2n.csv
+        upload_dir = os.path.join(PROJECT_ROOT, "data", "uploads")
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, "me2n.csv")
         try:
             file_bytes = file.read()
             with open(file_path, "wb") as f:
@@ -127,8 +129,10 @@ def upload_master():
     if not file.filename.lower().endswith(".csv"):
         return jsonify({"error": "Only .csv files are accepted"}), 400
     try:
-        # Save to disk as EKKO.csv, gracefully handle permission errors
-        file_path = os.path.join(PROJECT_ROOT, "EKKO.csv")
+        # Save to disk in data/uploads as EKKO.csv
+        upload_dir = os.path.join(PROJECT_ROOT, "data", "uploads")
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, "EKKO.csv")
         try:
             file_bytes = file.read()
             with open(file_path, "wb") as f:
@@ -735,8 +739,10 @@ def grir_upload():
     if not file or not (file.filename.lower().endswith(".csv") or file.filename.lower().endswith(".xlsx") or file.filename.lower().endswith(".xls")):
         return jsonify({"success": False, "error": "Only CSV, XLS, and XLSX formats are supported."}), 400
     try:
-        # Save to disk as grir.csv or grir.xlsx to prevent stream hangs
-        file_path = os.path.join(PROJECT_ROOT, file.filename)
+        # Save to disk in data/uploads
+        upload_dir = os.path.join(PROJECT_ROOT, "data", "uploads")
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, file.filename)
         try:
             file_bytes = file.read()
             with open(file_path, "wb") as f:
@@ -818,22 +824,32 @@ def grir_upload_files():
     print("[GRIR] Upload request received")
     
     try:
-        files = request.files
+        # Get all files uploaded under the key 'file'
+        uploaded_files = request.files.getlist('file')
         file_mapping = {}
         
         # Parse uploaded files and detect types
-        for file_key in files:
-            file = files[file_key]
+        for file in uploaded_files:
             if not file or file.filename == '':
                 continue
             
             try:
                 print(f"[GRIR] Processing file: {file.filename}")
                 
+                # Save file to data/uploads
+                upload_dir = os.path.join(PROJECT_ROOT, "data", "uploads")
+                os.makedirs(upload_dir, exist_ok=True)
+                file_path = os.path.join(upload_dir, file.filename)
+                
+                file_bytes = file.read()
+                with open(file_path, "wb") as f:
+                    f.write(file_bytes)
+                file.seek(0)
+                
                 if file.filename.lower().endswith('.csv'):
-                    df = pd.read_csv(file, encoding='utf-8', low_memory=False)
+                    df = pd.read_csv(file_path, encoding='utf-8', low_memory=False)
                 elif file.filename.lower().endswith(('.xlsx', '.xls')):
-                    df = pd.read_excel(file)
+                    df = pd.read_excel(file_path)
                 else:
                     return jsonify({"success": False, "error": f"Unsupported format for {file.filename}"}), 400
                 
@@ -841,8 +857,21 @@ def grir_upload_files():
                 file_type = _detect_grir_file_type(df)
                 if not file_type:
                     return jsonify({"success": False, "error": f"Could not detect file type for {file.filename}. Ensure it has proper GRIR/ME2N/EKKO columns."}), 400
-                
                 print(f"[GRIR] Detected file type: {file_type}")
+                
+                # Standardize filename in data/uploads so load_from_disk works on restart
+                std_filename = f"{file_type.lower()}.csv" if file_type != 'EKKO' else "EKKO.csv"
+                std_file_path = os.path.join(upload_dir, std_filename)
+                
+                if file_path != std_file_path:
+                    if os.path.exists(std_file_path):
+                        try:
+                            os.remove(std_file_path)
+                        except: pass
+                    try:
+                        os.rename(file_path, std_file_path)
+                    except: pass
+                
                 file_mapping[file_type] = df
                 
             except Exception as e:

@@ -251,14 +251,16 @@ class GRIRAnalyticsService:
         return self._df is not None and self._output is not None
 
     def load_from_disk(self, project_dir=None):
-        """Load pre-existing CSVs from project root on startup."""
+        """Load pre-existing CSVs from data/uploads on startup."""
         project_dir = Path(project_dir or PROJECT_DIR)
-        grir_path = project_dir / "grir.csv"
-        ekko_path = project_dir / "EKKO.csv"
-        me2n_path = project_dir / "me2n.csv"
+        upload_dir = project_dir / "data" / "uploads"
+        
+        grir_path = upload_dir / "grir.csv"
+        ekko_path = upload_dir / "EKKO.csv"
+        me2n_path = upload_dir / "me2n.csv"
 
         try:
-            print("\n[GRIR Service] Checking for pre-existing CSV files from project root...")
+            print("\n[GRIR Service] Checking for pre-existing CSV files from data/uploads...")
             loaded_any = False
 
             if ekko_path.exists():
