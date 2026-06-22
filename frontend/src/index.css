@@ -8,54 +8,65 @@
   body {
     @apply bg-[#0B0F19] text-slate-300 font-sans antialiased;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'tnum';
+    /* Tabular nums by default for a financial dashboard */
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Accessible focus states globally */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-blue-500 ring-offset-2 ring-offset-[#0B0F19];
   }
 
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { @apply bg-transparent; }
-  ::-webkit-scrollbar-thumb { @apply bg-slate-800 hover:bg-slate-700 rounded-sm; }
+  ::-webkit-scrollbar-thumb { @apply bg-slate-700 hover:bg-slate-600; }
 }
 
 @layer components {
+  /* No rounded corners, pure utilitarian */
   .glass-card {
-    @apply bg-[#111827] border border-slate-800 rounded-lg;
+    @apply bg-[#111827] border border-slate-800;
   }
   .glass-card-hover {
-    @apply glass-card transition-colors duration-200 hover:border-slate-600;
+    @apply glass-card transition-colors duration-200 hover:border-slate-700;
   }
-  .gradient-text {
-    @apply text-slate-50 font-semibold;
-  }
+  
+  /* Buttons: strict, minimalistic, blue accent */
   .btn-primary {
-    @apply px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-md transition-colors duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium transition-colors duration-150 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-secondary {
-    @apply px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-slate-600 text-slate-300 font-medium rounded-md transition-colors duration-200 active:scale-95;
+    @apply px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-slate-600 text-slate-300 font-medium transition-colors duration-150 active:scale-95;
   }
+  
+  /* Typography */
   .section-label {
     @apply text-xs font-bold text-slate-500 uppercase tracking-wider mb-2;
   }
   .chart-title {
-    @apply text-sm font-semibold text-slate-300;
+    @apply text-sm font-semibold text-slate-200;
   }
+  
+  /* Badges: no over-rounding */
   .badge {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium border;
   }
-  .badge-indigo { @apply badge bg-indigo-500/10 text-indigo-400 border border-indigo-500/20; }
-  .badge-green  { @apply badge bg-emerald-500/10 text-emerald-400 border border-emerald-500/20; }
-  .badge-amber  { @apply badge bg-amber-500/10 text-amber-400 border border-amber-500/20; }
-  .badge-red    { @apply badge bg-red-500/10 text-red-400 border border-red-500/20; }
-  .badge-cyan   { @apply badge bg-cyan-500/10 text-cyan-400 border border-cyan-500/20; }
+  .badge-blue   { @apply badge bg-blue-500/10 text-blue-400 border-blue-500/20; }
+  .badge-green  { @apply badge bg-emerald-500/10 text-emerald-400 border-emerald-500/20; }
+  .badge-amber  { @apply badge bg-amber-500/10 text-amber-400 border-amber-500/20; }
+  .badge-red    { @apply badge bg-red-500/10 text-red-400 border-red-500/20; }
+  .badge-cyan   { @apply badge bg-cyan-500/10 text-cyan-400 border-cyan-500/20; }
 }
 
-/* Recharts tooltip customization */
+/* Recharts tooltip customization - sharp corners */
 .recharts-tooltip-wrapper .recharts-default-tooltip {
   background: #111827 !important;
   border: 1px solid #1e293b !important;
-  border-radius: 6px !important;
+  border-radius: 0px !important;
   color: #f8fafc !important;
   padding: 8px 12px !important;
 }
 .recharts-tooltip-item { color: #cbd5e1 !important; }
-.recharts-cartesian-axis-tick-value { fill: #64748b !important; }
+.recharts-cartesian-axis-tick-value { fill: #64748b !important; font-variant-numeric: tabular-nums; }
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line { stroke: #1e293b !important; }

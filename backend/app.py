@@ -637,8 +637,35 @@ Guidelines:
         })
     messages.append({"role": "user", "content": user_message})
     import os
-    ollama_model = os.environ.get("OLLAMA_MODEL", "qwen3:8b")
+    import json
+    import urllib.request
+    import urllib.error
+
+    ollama_model = os.environ.get("OLLAMA_MODEL")
     ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
+    base_url = ollama_url.replace("/api/chat", "")
+
+    hardware_rec = ""
+    # Auto-detect model if not explicitly set
+    if not ollama_model:
+        try:
+            req_tags = urllib.request.Request(f"{base_url}/api/tags", method="GET")
+            with urllib.request.urlopen(req_tags, timeout=3) as resp:
+                tags_data = json.loads(resp.read().decode("utf-8"))
+                models = [m.get("name") for m in tags_data.get("models", [])]
+                if "qwen3:8b" in models:
+                    ollama_model = "qwen3:8b"
+                elif models:
+                    ollama_model = models[0] # Fallback to first available model
+                else:
+                    ollama_model = "qwen3:8b" # Default if list is empty
+                    cores = os.cpu_count() or 4
+                    if cores >= 8:
+                        hardware_rec = "\n\nHardware Recommendation: Since you are likely on a company laptop (CPU only, no dedicated GPU), run `ollama run phi3:mini` or `ollama run llama3.2:3b` for best performance."
+                    else:
+                        hardware_rec = "\n\nHardware Recommendation: For standard company laptops, we strongly recommend a lightweight model. Run `ollama run llama3.2:1b` or `ollama run gemma4-e2b-qat`."
+        except Exception as e:
+            ollama_model = "qwen3:8b"
 
     payload = {
         "model": ollama_model,
@@ -647,7 +674,6 @@ Guidelines:
     }
 
     try:
-        import json
         import urllib.request
         import urllib.error
 
@@ -664,7 +690,7 @@ Guidelines:
     except urllib.error.URLError as e:
         print(f"Ollama connection error: {e}")
         return jsonify({
-            "reply": f"I couldn't connect to the Ollama server at {ollama_url}. Please verify that Ollama is running and has the `{ollama_model}` model pulled (`ollama run {ollama_model}`)."
+            "reply": f"I couldn't connect to the Ollama server at {ollama_url}. Please verify that Ollama is running and has the `{ollama_model}` model pulled (`ollama run {ollama_model}`).{hardware_rec}"
         })
     except Exception as e:
         traceback.print_exc()
