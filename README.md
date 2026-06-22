@@ -58,6 +58,7 @@ SyrmaSGS_DashBoard/
 ### Prerequisites
 * **Python 3.10+**
 * **Node.js** (v18+ recommended) and **npm**
+* **Hardware Profile:** Designed to run entirely locally on standard company laptops (CPU-only, 16GB RAM) without requiring a dedicated GPU or external cloud connections.
 
 ---
 
@@ -93,24 +94,23 @@ SyrmaSGS_DashBoard/
    Download and install Ollama for your operating system from the [official website](https://ollama.com/download).
 
    **Step 2: Pull the Model**
-   Open a terminal and pull the default model:
-   ```bash
-   ollama run qwen3:8b
-   ```
+   Open your terminal and pull a model. Since most users run this on standard company laptops (16GB RAM, CPU-only, no dedicated GPU), here is a guide to what you should pull based on the performance you want:
 
-   **Step 3: Customizing the Model / Host**
-   You can override the model and URL via environment variables. This is especially useful for **laptops without a dedicated GPU**.
+   **Comfortable (fast enough to chat, 5–15 tokens/sec):**
+   * `ollama run llama3.2:3b` — Llama 3.2 1B / 3B (Q4_K_M): best all-rounder for your specs
+   * `ollama run qwen2.5:3b` — Qwen 2.5 1.5B / 3B: strong reasoning for size, great at coding
+   * `ollama run gemma2:2b` — Gemma 2 2B: solid quality, very efficient
+   * `ollama run phi3:mini` — Phi-3.5 Mini (3.8B) Q4: punches above its weight on reasoning
+   * `ollama run tinyllama` — TinyLlama 1.1B, SmolLM2 1.7B: fastest, lowest quality
 
-   **For Laptops without GPUs (CPU-only):**
-   Use smaller, highly optimized models like `gemma4-e2b-qat`, `llama3.2:1b`, or `phi3:mini`.
-   *Windows (PowerShell):*
-   ```powershell
-   $env:OLLAMA_MODEL="llama3.2:1b"
-   $env:OLLAMA_URL="http://localhost:11434/api/chat"
-   python backend/app.py
-   ```
+   **Usable but slow (1–4 tokens/sec, ok for non-interactive tasks):**
+   * `ollama run llama3.1:8b` — Llama 3.1 8B Q4_K_M (~5 GB RAM): best quality you’ll get, but expect coffee-break speeds
+   * `ollama run mistral` — Mistral 7B / Qwen 2.5 7B Q4: similar story
+   * `ollama run deepseek-coder:6.7b` — DeepSeek-Coder 6.7B Q4: if you specifically want coding help
+
+   *(Note: The backend automatically detects the model you pull. No environment variable configuration is needed for local use—just run the pull command and start the backend!)*
    
-   **For Centralized GPU Servers:**
+   **Step 3: Centralized GPU Servers (Optional)**
    If Ollama is hosted centrally on a powerful machine, point your local dashboard to it:
    *Windows (PowerShell):*
    ```powershell
